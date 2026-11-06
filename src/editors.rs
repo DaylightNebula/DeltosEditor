@@ -1,13 +1,17 @@
-use std::path::PathBuf;
+use std::{fmt::Debug, path::PathBuf};
 
 use gearbox::ui::UiBundle;
+use uuid::Uuid;
 
-use crate::sources::FileSource;
+use crate::{EDITOR_UUID_NAMESPACE, sources::FileSource};
 
 pub mod text;
 
 /// Defines an editor for a specific editor.
-pub trait FileEditor {
+pub trait FileEditor: Debug + Send {
+    /// The ID of this `FileEditor` type.  By default this is the v5 uuid built from the hash of `name`.
+    fn id(&self) -> Uuid { Uuid::new_v5(&EDITOR_UUID_NAMESPACE, self.name().as_bytes()) }
+
     /// The display name of this `FileEditor`.
     fn name(&self) -> String;
 
@@ -15,5 +19,5 @@ pub trait FileEditor {
     fn file_types(&self) -> Vec<String>;
 
     /// Supplier of a future to a bundle that represents the editor of a file.
-    fn build_editor<S: FileSource>(&mut self, source: S, path: PathBuf) -> UiBundle;
+    fn build_editor(&mut self, source: &dyn FileSource, path: PathBuf) -> UiBundle;
 }

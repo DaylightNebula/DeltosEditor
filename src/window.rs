@@ -161,12 +161,12 @@ fn open_folders(world: World, editor: Res<DeltosEditor>, toggled: Event<ValueCha
 }
 
 /// Open a file from the left bar.
-fn click_files(world: World, input: Res<UiInput>) {
+fn click_files(world: World, mut editor: ResMut<DeltosEditor>, input: Res<UiInput>) {
     let Some(id) = input.hovered else { return };
     if !input.activated(id) { return }
     let Ok(Some(file)) = world.handle(id).get::<&FileItem>() else { return };
 
-    println!("TODO open file {file:?}")
+    editor.open_tab(&world, &file.path);
 }
 
 /// Starts resizing the window when an edge is pressed, shows the matching arrows over it, and

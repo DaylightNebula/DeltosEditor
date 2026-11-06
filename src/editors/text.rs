@@ -1,9 +1,9 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anarchy::*;
-use gearbox::ui::*;
+use gearbox::{App, Plugin, ui::*};
 
-use crate::{colors, editors::FileEditor, sources::FileSource};
+use crate::{DeltosEditor, colors, editors::FileEditor, sources::FileSource};
 
 /// Marks the node holding an open file's text.
 #[derive(Debug, Clone, Component)]
@@ -12,20 +12,34 @@ pub struct OpenFile {
     pub dirty: bool,
 }
 
+/// Plugin to initialize a simple text editor into the Deltos editor.
+/// This editor will initialize as a default editor when no default is
+/// set at the time this plugins startup system is run.
+pub struct SimpleTextDeltosEditorPlugin;
+impl Plugin for SimpleTextDeltosEditorPlugin {
+    fn build(self, app: App) -> App {
+        app.on_startup(|mut editor: ResMut<DeltosEditor>| {
+            let text_editor = SimpleTextDeltosEditor { font: editor.font.clone() };
+            editor.add_editor(Box::new(text_editor), true);
+        })
+    }
+}
+
 /// Edits any file as plain text.
 /// (Not called `TextEditor`, because gearbox::ui already exports that name.)
-pub struct PlainTextEditor {
+#[derive(Debug)]
+pub struct SimpleTextDeltosEditor {
     pub font: Arc<SDFFont>,
 }
 
-impl FileEditor for PlainTextEditor {
+impl FileEditor for SimpleTextDeltosEditor {
     fn name(&self) -> String { "Text".into() }
 
     fn file_types(&self) -> Vec<String> {
         ["txt", "md", "toml", "json"].map(String::from).to_vec()
     }
 
-    fn build_editor<S: FileSource>(&mut self, source: S, path: PathBuf) -> UiBundle {
+    fn build_editor(&mut self, source: &dyn FileSource, path: PathBuf) -> UiBundle {
         let font = self.font.clone();
         match source.read_file_text(path.clone()) {
             Ok(text) => text_area(font, text, path),

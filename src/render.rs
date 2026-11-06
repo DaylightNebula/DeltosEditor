@@ -3,11 +3,11 @@ use std::path::{Path, PathBuf};
 use gearbox::{glam::*, ui::*};
 use winit::window::ResizeDirection;
 
-use crate::{DeltosEditor, colors, editors::{FileEditor, text::PlainTextEditor}, sources::{FileSource, local::LocalFileSource}, window::*};
+use crate::{DeltosEditor, EditorTab, colors, sources::{FileSource, local::LocalFileSource}, window::*};
 
 pub fn render(editor: &DeltosEditor) -> UiBundle {
-    let mut testeditor = PlainTextEditor { font: editor.font.clone() };
-    let testeditor = testeditor.build_editor(LocalFileSource, PathBuf::from("test.md"));
+    // let mut testeditor = SimpleTextDeltosEditor { font: editor.font.clone() };
+    // let testeditor = testeditor.build_editor(&LocalFileSource, PathBuf::from("test.md"));
 
     UiBundle::new(
             Node::column()
@@ -28,7 +28,8 @@ pub fn render(editor: &DeltosEditor) -> UiBundle {
                     .width(Val::Percent(1.0))
                     .height(Val::Percent(1.0)))
                     .child(tab_pane(&editor))
-                    .child(testeditor))
+                    // .child(testeditor)
+                    )
         ])
         .children(resize_edges())
 }
@@ -138,10 +139,10 @@ fn tab_strip(editor: &DeltosEditor) -> UiBundle {
         .overflow_x(Overflow::Scroll)
         .scrollbar(Scrollbar { width: 0.0, gap: 0.0, ..Scrollbar::default() }))
         .with(TabStrip)
-        .children(editor.tabs.iter().map(|tab_name| tab(editor, tab_name)))
+        .children(editor.tabs.iter().map(|tab_name| tab(editor, tab_name.1)))
 }
 
-fn tab(editor: &DeltosEditor, tab_name: &str) -> UiBundle {
+pub(crate) fn tab(editor: &DeltosEditor, tab: &EditorTab) -> UiBundle {
     UiBundle::new(Node::row()
         .align(AlignItems::Center)
         .gap(px(12.0))
@@ -151,11 +152,13 @@ fn tab(editor: &DeltosEditor, tab_name: &str) -> UiBundle {
         .background(colors::bg2))
         .children([
             UiBundle::new(Node::new())
-                .text(Text::new(editor.font.clone(), tab_name, Vec4::ONE, 14.0)
+                .text(Text::new(editor.font.clone(), &tab.name, Vec4::ONE, 14.0)
                     .with_align(Align::Center, Align::Center)),
-            UiBundle::new(Node::new())
+            UiBundle::new(Node::new()
+                .margin(Rect::single(Val::Px(5.0))))
                 .text(Text::new(editor.font.clone(), "×", Vec4::ONE, 14.0)
-                    .with_align(Align::Center, Align::Center)),
+                    .with_align(Align::Center, Align::Center))
+                .interactive(),
         ])
 }
 
