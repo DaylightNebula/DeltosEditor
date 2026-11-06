@@ -1,0 +1,13 @@
+[package]
+name = "deltos"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anarchy = { path = "../anarchy", features = ["glam"] }
+gearbox = { path = "../gearbox" }
+
+log = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+winit = "0.30"
