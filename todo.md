@@ -9,3 +9,5 @@
 
 [ ] Bug: Fix scrolling in file source list
 [ ] Bug: Fix scrolling in plain text editor
+
+[ ] Investigate: LSP support (maybe should be controlled by the FileEditor trait)
