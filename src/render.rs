@@ -28,8 +28,12 @@ pub fn render(editor: &DeltosEditor) -> UiBundle {
                     .width(Val::Percent(1.0))
                     .height(Val::Percent(1.0)))
                     .child(tab_pane(&editor))
-                    // .child(testeditor)
-                    )
+                    .child(
+                        UiBundle::new(Node::new()
+                            .width(Val::Percent(1.0))
+                            .height(Val::Percent(1.0)))
+                            .with(EditorContainer { editor_tab: None })
+                    ))
         ])
         .children(resize_edges())
 }
@@ -70,7 +74,8 @@ fn top_pane(editor: &DeltosEditor) -> UiBundle {
 
 fn file_selector(editor: &DeltosEditor) -> UiBundle {
     UiBundle::new(Node::column()
-        .width(Val::Percent(0.25))
+        .min_width(Val::Percent(0.25))
+        .max_width(Val::Percent(0.25))
         .height(Val::Percent(1.0))
         .overflow_y(Overflow::Scroll))
         .children(folder_contents(editor, Path::new("."), 0))
@@ -150,14 +155,22 @@ pub(crate) fn tab(editor: &DeltosEditor, tab: &EditorTab) -> UiBundle {
         .height(Val::Percent(1.0))
         .border_sides(Rect::new(px(1.5), px(0.0), px(1.5), px(1.5)), colors::bg3)
         .background(colors::bg2))
+        .with(TabItem(tab.id))
+        .interactive()
         .children([
             UiBundle::new(Node::new())
                 .text(Text::new(editor.font.clone(), &tab.name, Vec4::ONE, 14.0)
                     .with_align(Align::Center, Align::Center)),
             UiBundle::new(Node::new()
-                .margin(Rect::single(Val::Px(5.0))))
+                .width(px(20.0))
+                .height(px(20.0))
+                .justify(JustifyContent::Center)
+                .align(AlignItems::Center)
+                .margin(Rect::single(Val::Px(5.0)))
+                .radius(Val::Px(5.0)))
                 .text(Text::new(editor.font.clone(), "×", Vec4::ONE, 14.0)
                     .with_align(Align::Center, Align::Center))
+                .with(TabCloseButton(tab.id))
                 .interactive(),
         ])
 }

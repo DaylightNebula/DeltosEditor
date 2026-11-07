@@ -9,7 +9,8 @@ use gearbox::ui::*;
 use uuid::{Uuid, uuid};
 
 use crate::editors::FileEditor;
-use crate::window::{TabStrip, WindowPlugin};
+use crate::sources::local::LocalFileSource;
+use crate::window::{EditorContainer, TabStrip, WindowPlugin};
 
 pub const EDITOR_UUID_NAMESPACE: Uuid = uuid!("dcf01b57-1883-4daf-a843-49e6a0bfdc27");
 pub const TAB_UUID_NAMESPACE: Uuid = uuid!("fefe4e8b-7e6b-4e1b-a728-249b6b052d71");
@@ -67,6 +68,7 @@ pub struct DeltosEditor {
 pub struct EditorTab {
     pub id: Uuid,
     pub name: String,
+    pub path: PathBuf,
     pub editor: Option<Uuid>
 }
 
@@ -124,10 +126,52 @@ impl DeltosEditor {
             return;
         }
 
-        self.tabs.insert(file_id, EditorTab { id: file_id, name: file_name, editor });
+        self.tabs.insert(file_id, EditorTab { id: file_id, name: file_name, path: path.clone(), editor });
 
-        // query all active tab strips before
-        // iterating for replacement
+        self.rebuild_tab_strips(world);
+        self.rebuild_containers(world, Some(file_id));
+    }
+
+    pub fn focus_tab(&mut self, world: &World, tab_id: Uuid) {
+        if !self.tabs.contains_key(&tab_id) { return }
+
+        let containers: Vec<(EntityID, Mut<EditorContainer>)> = {
+            let mut query = Query::<&mut EditorContainer>::new(world);
+            let mut containers = Vec::new();
+            while let Ok(Some((id, container))) = query.next() { containers.push((id, container)); }
+            containers
+        };
+
+        for (_, mut container) in containers {
+            container.editor_tab = None;
+        }
+
+        self.rebuild_tab_strips(world);
+        self.rebuild_containers(world, Some(tab_id));
+    }
+
+    pub fn close_tab(&mut self, world: &World, tab_id: Uuid) {
+        self.tabs.remove(&tab_id);
+
+        let next_tab = self.tabs.keys().next().copied();
+
+        let containers: Vec<(EntityID, Mut<EditorContainer>)> = {
+            let mut query = Query::<&mut EditorContainer>::new(world);
+            let mut containers = Vec::new();
+            while let Ok(Some((id, container))) = query.next() { containers.push((id, container)); }
+            containers
+        };
+
+        for (_, mut container) in containers {
+            container.editor_tab = None;
+        }
+
+        self.rebuild_tab_strips(world);
+        self.rebuild_containers(world, next_tab);
+    }
+
+    fn rebuild_tab_strips(&mut self, world: &World) {
+        // query all active tab strips and editor containers before iterating for replacement
         let strips: Vec<EntityID> = {
             let mut query = Query::<&TabStrip>::new(world);
             let mut ids = Vec::new();
@@ -149,6 +193,53 @@ impl DeltosEditor {
             for tab in self.tabs.values() {
                 world.spawn_with_parent(Some(strip), render::tab(self, tab).into_entity_builder());
             }
+        }
+    }
+
+    fn rebuild_containers(&mut self, world: &World, tab: Option<Uuid>) {
+        let containers: Vec<(EntityID, Mut<EditorContainer>)> = {
+            let mut query = Query::<&mut EditorContainer>::new(world);
+            let mut containers = Vec::new();
+            while let Ok(Some((id, container))) = query.next() { containers.push((id, container)); }
+            containers
+        };
+
+        for (entity_id, mut container) in containers {
+            // if tab mentioned in container is still active, skip container
+            if container.editor_tab.is_some() && self.tabs.contains_key(container.editor_tab.as_ref().unwrap()) {
+                continue;
+            }
+
+            // update tab
+            container.editor_tab = tab;
+
+            // despawn old children
+            let old: Vec<EntityID> = world.hierarchy()
+                .children(entity_id)
+                .map(|c| c.to_vec())
+                .unwrap_or_default();
+            for child in old {
+                world.handle(child).despawn_recursive();
+            }
+
+            // build and append new child
+            let Some(tab) = container.editor_tab
+                .map(|tab| self.tabs.get(&tab))
+                .flatten()
+                else { continue };
+            let Some(editor_id) = tab.path.extension()
+                .map(|ext| ext.to_string_lossy().to_string())
+                .map(|ext| self.file_type_editor_lookup.get(&ext))
+                .flatten()
+                .or_else(|| self.default_editor.as_ref())
+                else { continue };
+            let Some(editor) = self.editors.get_mut(editor_id)
+                else { continue };
+
+            // build, spawn and append new editor
+            let bundle = editor.build_editor(&LocalFileSource, tab.path.clone());
+            let child = world.spawn(bundle.into_entity_builder());
+            let _ = world.hierarchy().add_child(entity_id, child);
         }
     }
 }

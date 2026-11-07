@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anarchy::*;
 use gearbox::{glam::{Vec2, Vec4}, ui::*, *};
+use uuid::Uuid;
 use winit::window::{CursorIcon, ResizeDirection};
 
 #[cfg(windows)]
@@ -36,6 +37,8 @@ impl Plugin for WindowPlugin {
             .on_render_update(resize_window)
             .on_render_update(open_folders)
             .on_render_update(click_files)
+            .on_render_update(click_tabs)
+            .on_render_update(light_tab_close_buttons)
     }
 }
 
@@ -47,6 +50,15 @@ pub struct DragRegion;
 
 #[derive(Debug, Clone, Copy, Component)]
 pub struct TabStrip;
+
+#[derive(Debug, Clone, Copy, Component)]
+pub struct TabItem(pub Uuid);
+
+#[derive(Debug, Clone, Copy, Component)]
+pub struct TabCloseButton(pub Uuid);
+
+#[derive(Debug, Clone, Copy, Component)]
+pub struct EditorContainer { pub editor_tab: Option<Uuid> }
 
 #[derive(Debug, Clone, Copy, Component)]
 pub struct ResizeEdge(pub ResizeDirection);
@@ -167,6 +179,32 @@ fn click_files(world: World, mut editor: ResMut<DeltosEditor>, input: Res<UiInpu
     let Ok(Some(file)) = world.handle(id).get::<&FileItem>() else { return };
 
     editor.open_tab(&world, &file.path);
+}
+
+/// Open a tab on click.
+fn click_tabs(world: World, mut editor: ResMut<DeltosEditor>, input: Res<UiInput>) {
+    let Some(id) = input.hovered else { return };
+    if !input.activated(id) { return }
+
+    // copy the uuids out so the component borrows end before the world is mutated
+    let handle = world.handle(id);
+    let close = handle.get::<&TabCloseButton>().ok().flatten().map(|c| c.0);
+    let focus = handle.get::<&TabItem>().ok().flatten().map(|t| t.0);
+
+    if let Some(tab) = close { editor.close_tab(&world, tab) }
+    else if let Some(tab) = focus { editor.focus_tab(&world, tab) }
+}
+
+/// Turns a tab's × red while the pointer is over it.
+fn light_tab_close_buttons(mut buttons: Query<(&'static TabCloseButton, &'static Interaction, &'static mut Node)>) {
+    while let Ok(Some((_, (_, interaction, mut node)))) = buttons.next() {
+        let background = match *interaction {
+            Interaction::None => Background::Empty,
+            Interaction::Hovered => Background::Color(Vec4::new(0.77, 0.17, 0.11, 1.0)),
+            Interaction::Pressed => Background::Color(Vec4::new(0.60, 0.12, 0.08, 1.0)), // a bit darker while held
+        };
+        node.style_mut().set_background(background);
+    }
 }
 
 /// Starts resizing the window when an edge is pressed, shows the matching arrows over it, and
