@@ -3,11 +3,10 @@ use std::path::{Path, PathBuf};
 use gearbox::{glam::*, ui::*};
 use winit::window::ResizeDirection;
 
-use crate::{DeltosEditor, EditorTab, colors, sources::{FileSource, local::LocalFileSource}, window::*};
+use crate::{DeltosEditor, EditorTab, EditorTile, colors, sources::{FileSource, local::LocalFileSource}, window::*};
 
 pub fn render(editor: &DeltosEditor) -> UiBundle {
-    // let mut testeditor = SimpleTextDeltosEditor { font: editor.font.clone() };
-    // let testeditor = testeditor.build_editor(&LocalFileSource, PathBuf::from("test.md"));
+    let tile = editor.tiles.values().next().unwrap();
 
     UiBundle::new(
             Node::column()
@@ -27,12 +26,12 @@ pub fn render(editor: &DeltosEditor) -> UiBundle {
                 .child(UiBundle::new(Node::new()
                     .width(Val::Percent(1.0))
                     .height(Val::Percent(1.0)))
-                    .child(tab_pane(&editor))
+                    .child(tab_pane(&editor, tile))
                     .child(
                         UiBundle::new(Node::new()
                             .width(Val::Percent(1.0))
                             .height(Val::Percent(1.0)))
-                            .with(EditorContainer { editor_tab: None })
+                            .with(EditorContainer { tile_id: tile.id })
                     ))
         ])
         .children(resize_edges())
@@ -125,17 +124,17 @@ fn row(depth: usize) -> UiBundle {
         .padding(Rect::new(px(6.0), px(6.0), px(16.0 + depth as f32 * INDENT), px(0.0))))
 }
 
-fn tab_pane(editor: &DeltosEditor) -> UiBundle {
+fn tab_pane(editor: &DeltosEditor, tile: &EditorTile) -> UiBundle {
     UiBundle::new(Node::row()
         .width(Val::Percent(1.0))
         .height(px(40.0))
         .background(colors::bg1)
         .align(AlignItems::Center)
         .shrink(0.0))
-        .child(tab_strip(editor))
+        .child(tab_strip(editor, tile))
 }
 
-fn tab_strip(editor: &DeltosEditor) -> UiBundle {
+fn tab_strip(editor: &DeltosEditor, tile: &EditorTile) -> UiBundle {
     UiBundle::new(Node::row()
         .height(Val::Percent(1.0))
         .align(AlignItems::Center)
@@ -143,19 +142,19 @@ fn tab_strip(editor: &DeltosEditor) -> UiBundle {
         .min_width(px(0.0))
         .overflow_x(Overflow::Scroll)
         .scrollbar(Scrollbar { width: 0.0, gap: 0.0, ..Scrollbar::default() }))
-        .with(TabStrip)
-        .children(editor.tabs.iter().map(|tab_name| tab(editor, tab_name.1)))
+        .with(TabStrip { tile_id: tile.id })
+        .children(tile.tabs.iter().map(|tab_name| tab(editor, &tile, tab_name.1)))
 }
 
-pub(crate) fn tab(editor: &DeltosEditor, tab: &EditorTab) -> UiBundle {
+pub(crate) fn tab(editor: &DeltosEditor, tile: &EditorTile, tab: &EditorTab) -> UiBundle {
     UiBundle::new(Node::row()
         .align(AlignItems::Center)
         .gap(px(12.0))
         .padding(Rect::new(px(0.0), px(0.0), px(10.0), px(10.0)))
         .height(Val::Percent(1.0))
         .border_sides(Rect::new(px(1.5), px(0.0), px(1.5), px(1.5)), colors::bg3)
-        .background(colors::bg2))
-        .with(TabItem(tab.id))
+        .background(if tile.editor_tab.is_some() && tile.editor_tab.unwrap() == tab.id { colors::bg4 } else { colors::bg2 }))
+        .with(TabItem { tile_id: tile.id, tab_id: tab.id })
         .interactive()
         .children([
             UiBundle::new(Node::new())
@@ -170,7 +169,7 @@ pub(crate) fn tab(editor: &DeltosEditor, tab: &EditorTab) -> UiBundle {
                 .radius(Val::Px(5.0)))
                 .text(Text::new(editor.font.clone(), "×", Vec4::ONE, 14.0)
                     .with_align(Align::Center, Align::Center))
-                .with(TabCloseButton(tab.id))
+                .with(TabCloseButton { tile_id: tile.id, tab_id: tab.id })
                 .interactive(),
         ])
 }

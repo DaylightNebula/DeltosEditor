@@ -49,16 +49,26 @@ pub enum WindowButton { Minimize, Maximize, Close }
 pub struct DragRegion;
 
 #[derive(Debug, Clone, Copy, Component)]
-pub struct TabStrip;
+pub struct TabStrip {
+    pub tile_id: Uuid
+}
 
 #[derive(Debug, Clone, Copy, Component)]
-pub struct TabItem(pub Uuid);
+pub struct TabItem {
+    pub tile_id: Uuid,
+    pub tab_id: Uuid
+}
 
 #[derive(Debug, Clone, Copy, Component)]
-pub struct TabCloseButton(pub Uuid);
+pub struct TabCloseButton {
+    pub tile_id: Uuid,
+    pub tab_id: Uuid
+}
 
 #[derive(Debug, Clone, Copy, Component)]
-pub struct EditorContainer { pub editor_tab: Option<Uuid> }
+pub struct EditorContainer {
+    pub tile_id: Uuid
+}
 
 #[derive(Debug, Clone, Copy, Component)]
 pub struct ResizeEdge(pub ResizeDirection);
@@ -188,11 +198,11 @@ fn click_tabs(world: World, mut editor: ResMut<DeltosEditor>, input: Res<UiInput
 
     // copy the uuids out so the component borrows end before the world is mutated
     let handle = world.handle(id);
-    let close = handle.get::<&TabCloseButton>().ok().flatten().map(|c| c.0);
-    let focus = handle.get::<&TabItem>().ok().flatten().map(|t| t.0);
+    let close = handle.get::<&TabCloseButton>().ok().flatten().map(|c| (c.tile_id, c.tab_id));
+    let focus = handle.get::<&TabItem>().ok().flatten().map(|t| (t.tile_id, t.tab_id));
 
-    if let Some(tab) = close { editor.close_tab(&world, tab) }
-    else if let Some(tab) = focus { editor.focus_tab(&world, tab) }
+    if let Some(tab) = close { editor.close_tab(&world, tab.0, tab.1) }
+    else if let Some(tab) = focus { editor.focus_tab(&world, tab.0, tab.1) }
 }
 
 /// Turns a tab's × red while the pointer is over it.

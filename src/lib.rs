@@ -57,10 +57,18 @@ impl Plugin for DeltosPlugin {
 #[derive(Resource, Debug)]
 pub struct DeltosEditor {
     pub font: Arc<SDFFont>,
-    pub tabs: AHashMap<Uuid, EditorTab>,
+    pub tiles: AHashMap<Uuid, EditorTile>,
     pub editors: AHashMap<Uuid, Box<dyn FileEditor>>,
     pub file_type_editor_lookup: AHashMap<String, Uuid>,
     pub default_editor: Option<Uuid>
+}
+
+/// A container of tabs that can be built into one tile.
+#[derive(Debug)]
+pub struct EditorTile {
+    pub id: Uuid,
+    pub tabs: AHashMap<Uuid, EditorTab>,
+    pub editor_tab: Option<Uuid>
 }
 
 /// A container of all information of an active editor.
@@ -83,9 +91,12 @@ impl Debug for EditorTab {
 
 impl DeltosEditor {
     pub fn new(font: Arc<SDFFont>) -> Self {
+        let default_tile = EditorTile { id: Uuid::new_v4(), tabs: AHashMap::default(), editor_tab: None };
+        let mut tiles = AHashMap::default();
+        tiles.insert(default_tile.id, default_tile);
+
         Self {
-            font,
-            tabs: AHashMap::default(),
+            font, tiles,
             editors: AHashMap::default(),
             file_type_editor_lookup: AHashMap::default(),
             default_editor: None
@@ -121,125 +132,109 @@ impl DeltosEditor {
             .copied()
             .or_else(|| self.default_editor);
 
-        if self.tabs.contains_key(&file_id) {
+        if self.tiles.values().any(|a| a.tabs.contains_key(&file_id)) {
             println!("TODO focus tab {file_id}");
             return;
         }
 
-        self.tabs.insert(file_id, EditorTab { id: file_id, name: file_name, path: path.clone(), editor });
-
-        self.rebuild_tab_strips(world);
-        self.rebuild_containers(world, Some(file_id));
-    }
-
-    pub fn focus_tab(&mut self, world: &World, tab_id: Uuid) {
-        if !self.tabs.contains_key(&tab_id) { return }
-
-        let containers: Vec<(EntityID, Mut<EditorContainer>)> = {
-            let mut query = Query::<&mut EditorContainer>::new(world);
-            let mut containers = Vec::new();
-            while let Ok(Some((id, container))) = query.next() { containers.push((id, container)); }
-            containers
+        let tile_id = {
+            let Some((tile_id, tile)) = self.tiles.iter_mut().next() else { return };
+            tile.tabs.insert(file_id, EditorTab { id: file_id, name: file_name, path: path.clone(), editor });
+            *tile_id
         };
-
-        for (_, mut container) in containers {
-            container.editor_tab = None;
-        }
-
-        self.rebuild_tab_strips(world);
-        self.rebuild_containers(world, Some(tab_id));
+        self.rebuild_containers(world, tile_id, Some(file_id));
+        self.rebuild_tab_strips(world, tile_id);
     }
 
-    pub fn close_tab(&mut self, world: &World, tab_id: Uuid) {
-        self.tabs.remove(&tab_id);
+    pub fn focus_tab(&mut self, world: &World, tile_id: Uuid, tab_id: Uuid) {
+        let Some(tile) = self.tiles.get_mut(&tile_id) else { return };
+        if !tile.tabs.contains_key(&tab_id) { return }
 
-        let next_tab = self.tabs.keys().next().copied();
+        tile.editor_tab = None;
 
-        let containers: Vec<(EntityID, Mut<EditorContainer>)> = {
-            let mut query = Query::<&mut EditorContainer>::new(world);
-            let mut containers = Vec::new();
-            while let Ok(Some((id, container))) = query.next() { containers.push((id, container)); }
-            containers
-        };
-
-        for (_, mut container) in containers {
-            container.editor_tab = None;
-        }
-
-        self.rebuild_tab_strips(world);
-        self.rebuild_containers(world, next_tab);
+        self.rebuild_containers(world, tile_id, Some(tab_id));
+        self.rebuild_tab_strips(world, tile_id);
     }
 
-    fn rebuild_tab_strips(&mut self, world: &World) {
+    pub fn close_tab(&mut self, world: &World, tile_id: Uuid, tab_id: Uuid) {
+        let Some(tile) = self.tiles.get_mut(&tile_id) else { return };
+
+        tile.tabs.remove(&tab_id);
+        tile.editor_tab = None;
+
+        let next_tab = tile.tabs.keys().next().copied();
+        self.rebuild_containers(world, tile_id, next_tab);
+        self.rebuild_tab_strips(world, tile_id);
+    }
+
+    fn rebuild_tab_strips(&mut self, world: &World, tile_id: Uuid) {
+        let Some(tile) = self.tiles.get(&tile_id) else { return };
+
         // query all active tab strips and editor containers before iterating for replacement
-        let strips: Vec<EntityID> = {
-            let mut query = Query::<&TabStrip>::new(world);
-            let mut ids = Vec::new();
-            while let Ok(Some((id, _))) = query.next() { ids.push(id); }
-            ids
-        };
+        let Some((strip_id, _)) = Query::<&TabStrip>::new(world).iter()
+            .filter(|(_, strip)| strip.tile_id == tile_id)
+            .next()
+            else { return };
 
-        for strip in strips {
-            // wipe tab children of each strip (assuming all children are tabs)
-            let old: Vec<EntityID> = world.hierarchy()
-                .children(strip)
-                .map(|c| c.to_vec())
-                .unwrap_or_default();
-            for child in old {
-                world.handle(child).despawn_recursive();
-            }
+        // wipe tab children of each strip (assuming all children are tabs)
+        let old: Vec<EntityID> = world.hierarchy()
+            .children(strip_id)
+            .map(|c| c.to_vec())
+            .unwrap_or_default();
+        for child in old {
+            world.handle(child).despawn_recursive();
+        }
 
-            // spawn a new tab for each tab entry stored in the editor
-            for tab in self.tabs.values() {
-                world.spawn_with_parent(Some(strip), render::tab(self, tab).into_entity_builder());
-            }
+        // spawn a new tab for each tab entry stored in the editor
+        for tab in tile.tabs.values() {
+            world.spawn_with_parent(Some(strip_id), render::tab(self, tile, tab).into_entity_builder());
         }
     }
 
-    fn rebuild_containers(&mut self, world: &World, tab: Option<Uuid>) {
-        let containers: Vec<(EntityID, Mut<EditorContainer>)> = {
-            let mut query = Query::<&mut EditorContainer>::new(world);
-            let mut containers = Vec::new();
-            while let Ok(Some((id, container))) = query.next() { containers.push((id, container)); }
-            containers
-        };
+    fn rebuild_containers(&mut self, world: &World, tile_id: Uuid, tab: Option<Uuid>) {
+        let Some(tile) = self.tiles.get_mut(&tile_id) else { return };
 
-        for (entity_id, mut container) in containers {
-            // if tab mentioned in container is still active, skip container
-            if container.editor_tab.is_some() && self.tabs.contains_key(container.editor_tab.as_ref().unwrap()) {
-                continue;
-            }
+        // query container
+        let Some((entity_id, _)) = Query::<&mut EditorContainer>::new(world)
+            .iter()
+            .filter(|(_, container)| container.tile_id == tile_id)
+            .next()
+            else { return };
 
-            // update tab
-            container.editor_tab = tab;
-
-            // despawn old children
-            let old: Vec<EntityID> = world.hierarchy()
-                .children(entity_id)
-                .map(|c| c.to_vec())
-                .unwrap_or_default();
-            for child in old {
-                world.handle(child).despawn_recursive();
-            }
-
-            // build and append new child
-            let Some(tab) = container.editor_tab
-                .map(|tab| self.tabs.get(&tab))
-                .flatten()
-                else { continue };
-            let Some(editor_id) = tab.path.extension()
-                .map(|ext| ext.to_string_lossy().to_string())
-                .map(|ext| self.file_type_editor_lookup.get(&ext))
-                .flatten()
-                .or_else(|| self.default_editor.as_ref())
-                else { continue };
-            let Some(editor) = self.editors.get_mut(editor_id)
-                else { continue };
-
-            // build, spawn and append new editor
-            let bundle = editor.build_editor(&LocalFileSource, tab.path.clone());
-            let child = world.spawn(bundle.into_entity_builder());
-            let _ = world.hierarchy().add_child(entity_id, child);
+        // if tab mentioned in container is still active, skip container
+        if tile.editor_tab.is_some() && tile.tabs.contains_key(tile.editor_tab.as_ref().unwrap()) {
+            return;
         }
+
+        // update tab
+        tile.editor_tab = tab;
+
+        // despawn old children
+        let old: Vec<EntityID> = world.hierarchy()
+            .children(entity_id)
+            .map(|c| c.to_vec())
+            .unwrap_or_default();
+        for child in old {
+            world.handle(child).despawn_recursive();
+        }
+
+        // build and append new child
+        let Some(tab) = tile.editor_tab
+            .map(|tab| tile.tabs.get(&tab))
+            .flatten()
+            else { return };
+        let Some(editor_id) = tab.path.extension()
+            .map(|ext| ext.to_string_lossy().to_string())
+            .map(|ext| self.file_type_editor_lookup.get(&ext))
+            .flatten()
+            .or_else(|| self.default_editor.as_ref())
+            else { return };
+        let Some(editor) = self.editors.get_mut(editor_id)
+            else { return };
+
+        // build, spawn and append new editor
+        let bundle = editor.build_editor(&LocalFileSource, tab.path.clone());
+        let child = world.spawn(bundle.into_entity_builder());
+        let _ = world.hierarchy().add_child(entity_id, child);
     }
 }
