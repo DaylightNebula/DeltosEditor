@@ -66,6 +66,7 @@ fn text_area(font: Arc<SDFFont>, text: String, source: Uuid, path: PathBuf) -> U
             .grow(1.0)
             .width(Val::Percent(1.0))
             .min_width(px(0.0))
+            .min_height(px(0.0))
             .padding(Rect::single(px(12.0)))
             .background(colors::bg0)
             .border(1.5, colors::bg4)

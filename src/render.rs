@@ -20,9 +20,11 @@ pub fn render(editor: &DeltosEditor) -> UiBundle {
             // tab bar and top pane
             top_pane(&editor),
 
-            // editor pane and central pane
+            // editor pane and central pane, allowed to shrink below their content so they scroll
+            // instead of growing past the window
             UiBundle::new(Node::row()
-                .grow(1.0))
+                .grow(1.0)
+                .min_height(px(0.0)))
                 .child(file_selector(&editor))
                 .child(UiBundle::new(Node::new()
                     .width(Val::Percent(1.0))
@@ -31,7 +33,8 @@ pub fn render(editor: &DeltosEditor) -> UiBundle {
                     .child(
                         UiBundle::new(Node::new()
                             .width(Val::Percent(1.0))
-                            .height(Val::Percent(1.0)))
+                            .height(Val::Percent(1.0))
+                            .min_height(px(0.0)))
                             .with(EditorContainer { tile_id: tile.id })
                     ))
         ])
