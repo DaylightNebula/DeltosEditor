@@ -9,6 +9,7 @@ use gearbox::ui::*;
 use uuid::{Uuid, uuid};
 
 use crate::editors::FileEditor;
+use crate::hover::HoverPlugin;
 use crate::sources::local::LocalFileSource;
 use crate::window::{EditorContainer, TabStrip, WindowPlugin};
 
@@ -17,6 +18,7 @@ pub const TAB_UUID_NAMESPACE: Uuid = uuid!("fefe4e8b-7e6b-4e1b-a728-249b6b052d71
 
 pub mod colors;
 pub mod editors;
+pub mod hover;
 pub mod render;
 pub mod sources;
 pub mod window;
@@ -49,6 +51,7 @@ impl Plugin for DeltosPlugin {
             .add_plugin(UIPlugin)
             .add_plugin(WidgetPlugin::new(self.font.clone()))
             .add_plugin(WindowPlugin)
+            .add_plugin(HoverPlugin)
             .add_resource(DeltosEditor::new(self.font.clone()))
     }
 }
@@ -56,6 +59,7 @@ impl Plugin for DeltosPlugin {
 /// The primary storage for the Detlos Editor.
 #[derive(Resource, Debug)]
 pub struct DeltosEditor {
+    pub title: String,
     pub font: Arc<SDFFont>,
     pub tiles: AHashMap<Uuid, EditorTile>,
     pub editors: AHashMap<Uuid, Box<dyn FileEditor>>,
@@ -97,6 +101,7 @@ impl DeltosEditor {
 
         Self {
             font, tiles,
+            title: "Deltos Editor".to_string(),
             editors: AHashMap::default(),
             file_type_editor_lookup: AHashMap::default(),
             default_editor: None

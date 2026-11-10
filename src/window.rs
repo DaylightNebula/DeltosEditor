@@ -32,17 +32,15 @@ impl Plugin for WindowPlugin {
             .on_startup(setup)
             .on_render_update(window_buttons)
             .on_render_update(drag_window)
-            .on_render_update(light_window_buttons)
             .on_render_update(scroll_tabs)
             .on_render_update(resize_window)
             .on_render_update(open_folders)
             .on_render_update(click_files)
             .on_render_update(click_tabs)
-            .on_render_update(light_tab_close_buttons)
     }
 }
 
-#[derive(Debug, Clone, Copy, Component)]
+#[derive(Debug, Clone, Copy, Component, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WindowButton { Minimize, Maximize, Close }
 
 #[derive(Debug, Clone, Copy, Component)]
@@ -127,18 +125,6 @@ fn drag_window(input: Res<UiInput>, graphics: Res<Graphics>, mut regions: Query<
     }
 }
 
-/// Lights caption buttons under the pointer, the close button in red.
-fn light_window_buttons(mut buttons: Query<(&'static WindowButton, &'static Interaction, &'static mut Node)>) {
-    while let Ok(Some((_, (button, interaction, mut node)))) = buttons.next() {
-        let background = match (*interaction, *button) {
-            (Interaction::None, _) => Background::Empty,
-            (_, WindowButton::Close) => Background::Color(Vec4::new(0.77, 0.17, 0.11, 1.0)),
-            _ => Background::Color(MENU_HOVER),
-        };
-        node.style_mut().set_background(background);
-    }
-}
-
 // Handle scrolling tab strip
 fn scroll_tabs(input: Res<UiInput>, mut strips: Query<(&'static TabStrip, &'static ComputedNode, &'static mut Node)>) {
     if input.wheel == 0.0 || input.modifiers.shift_key() || input.over_windows { return }
@@ -203,18 +189,6 @@ fn click_tabs(world: World, mut editor: ResMut<DeltosEditor>, input: Res<UiInput
 
     if let Some(tab) = close { editor.close_tab(&world, tab.0, tab.1) }
     else if let Some(tab) = focus { editor.focus_tab(&world, tab.0, tab.1) }
-}
-
-/// Turns a tab's × red while the pointer is over it.
-fn light_tab_close_buttons(mut buttons: Query<(&'static TabCloseButton, &'static Interaction, &'static mut Node)>) {
-    while let Ok(Some((_, (_, interaction, mut node)))) = buttons.next() {
-        let background = match *interaction {
-            Interaction::None => Background::Empty,
-            Interaction::Hovered => Background::Color(Vec4::new(0.77, 0.17, 0.11, 1.0)),
-            Interaction::Pressed => Background::Color(Vec4::new(0.60, 0.12, 0.08, 1.0)), // a bit darker while held
-        };
-        node.style_mut().set_background(background);
-    }
 }
 
 /// Starts resizing the window when an edge is pressed, shows the matching arrows over it, and

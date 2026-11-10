@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use gearbox::{glam::*, ui::*};
 use winit::window::ResizeDirection;
 
-use crate::{DeltosEditor, EditorTab, EditorTile, colors, sources::{FileSource, local::LocalFileSource}, window::*};
+use crate::{DeltosEditor, EditorTab, EditorTile, colors, hover::HoverStyle, sources::{FileSource, local::LocalFileSource}, window::*};
 
 pub fn render(editor: &DeltosEditor) -> UiBundle {
     let tile = editor.tiles.values().next().unwrap();
@@ -45,16 +45,25 @@ fn top_pane(editor: &DeltosEditor) -> UiBundle {
         .align(AlignItems::Center)
         .shrink(0.0))
         .child(
-            UiBundle::new(Node::row()
-                .align(AlignItems::Center)
-                .height(Val::Percent(1.0))
-                .padding(Rect::new(px(10.0), px(10.0), px(14.0), px(14.0))))
-                .interactive()
-                .children([
-                    UiBundle::new(Node::new())
+            UiBundle::new(Node::row())
+                .child(
+                    UiBundle::new(Node::row()
+                        .align(AlignItems::Center)
+                        .height(Val::Percent(1.0))
+                        .padding(Rect::new(px(10.0), px(10.0), px(14.0), px(14.0))))
+                        .with(HoverStyle::new(colors::bg4))
+                        .interactive()
                         .text(Text::new(editor.font.clone(), "".to_string(), Vec4::ONE, 18.0)
-                            .with_align(Align::Center, Align::Center)),
-                ])
+                            .with_align(Align::Center, Align::Center))
+                )
+                .child(
+                    UiBundle::new(Node::row()
+                        .align(AlignItems::Center)
+                        .height(Val::Percent(1.0))
+                        .padding(Rect::new(px(10.0), px(10.0), px(14.0), px(14.0))))
+                        .text(Text::new(editor.font.clone(), editor.title.clone(), Vec4::ONE, 14.0)
+                            .with_align(Align::Center, Align::Center))
+                )
         )
         .child(
             UiBundle::new(Node::new()
@@ -102,7 +111,8 @@ fn folder_item(editor: &DeltosEditor, path: PathBuf, depth: usize) -> UiBundle {
         .child(row(depth)
             .text(Text::new(editor.font.clone(), format!("{FOLDER_CLOSED} {name}"), colors::fg0, 14.0)
                 .with_align(Align::Start, Align::Center))
-            .interactive())
+            .interactive()
+            .with(HoverStyle::new(colors::bg4)))
         .child(UiBundle::new(Node::column().shrink(0.0)))
 }
 
@@ -116,6 +126,7 @@ fn file_item(editor: &DeltosEditor, file: &PathBuf, depth: usize) -> UiBundle {
             .with_align(Align::Start, Align::Center))
         .interactive()
         .with(FileItem { path: file.clone() })
+        .with(HoverStyle::new(colors::bg4))
 }
 
 fn row(depth: usize) -> UiBundle {
@@ -155,6 +166,7 @@ pub(crate) fn tab(editor: &DeltosEditor, tile: &EditorTile, tab: &EditorTab) -> 
         .border_sides(Rect::new(px(1.5), px(0.0), px(1.5), px(1.5)), colors::bg3)
         .background(if tile.editor_tab.is_some() && tile.editor_tab.unwrap() == tab.id { colors::bg4 } else { colors::bg2 }))
         .with(TabItem { tile_id: tile.id, tab_id: tab.id })
+        .with(HoverStyle::new(colors::bg4))
         .interactive()
         .children([
             UiBundle::new(Node::new())
@@ -170,6 +182,7 @@ pub(crate) fn tab(editor: &DeltosEditor, tile: &EditorTile, tab: &EditorTab) -> 
                 .text(Text::new(editor.font.clone(), "×", Vec4::ONE, 14.0)
                     .with_align(Align::Center, Align::Center))
                 .with(TabCloseButton { tile_id: tile.id, tab_id: tab.id })
+                .with(HoverStyle::new(colors::red))
                 .interactive(),
         ])
 }
@@ -182,6 +195,7 @@ fn caption_button(editor: &DeltosEditor, label: &str, button: WindowButton) -> U
         .justify(JustifyContent::Center)
         .shrink(0.0))
         .with(button)
+        .with(HoverStyle::new(if button == WindowButton::Close { colors::red } else { colors::bg4 }))
         .interactive()
         .text(Text::new(editor.font.clone(), label, Vec4::ONE, 16.0)
             .with_align(Align::Center, Align::Center))
