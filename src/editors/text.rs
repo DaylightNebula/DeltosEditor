@@ -2,8 +2,9 @@ use std::{path::PathBuf, sync::Arc};
 
 use anarchy::*;
 use gearbox::{App, Plugin, ui::*};
+use winit::keyboard::Key;
 
-use crate::{DeltosEditor, colors, editors::FileEditor, sources::FileSource};
+use crate::{DeltosEditor, colors, editors::FileEditor, sources::{Source, local::LocalFileSource}};
 
 /// Marks the node holding an open file's text.
 #[derive(Debug, Clone, Component)]
@@ -18,10 +19,12 @@ pub struct OpenFile {
 pub struct SimpleTextDeltosEditorPlugin;
 impl Plugin for SimpleTextDeltosEditorPlugin {
     fn build(self, app: App) -> App {
-        app.on_startup(|mut editor: ResMut<DeltosEditor>| {
-            let text_editor = SimpleTextDeltosEditor { font: editor.font.clone() };
-            editor.add_editor(Box::new(text_editor), true);
-        })
+        app .on_startup(|mut editor: ResMut<DeltosEditor>| {
+                let text_editor = SimpleTextDeltosEditor { font: editor.font.clone() };
+                editor.add_editor(Box::new(text_editor), true);
+            })
+            .on_render_update(mark_dirty)
+            .on_render_update(save_files)
     }
 }
 
@@ -39,7 +42,7 @@ impl FileEditor for SimpleTextDeltosEditor {
         ["txt", "md", "toml", "json"].map(String::from).to_vec()
     }
 
-    fn build_editor(&mut self, source: &dyn FileSource, path: PathBuf) -> UiBundle {
+    fn build_editor(&mut self, source: &dyn Source, path: PathBuf) -> UiBundle {
         let font = self.font.clone();
         match source.read_file_text(path.clone()) {
             Ok(text) => text_area(font, text, path),
@@ -63,4 +66,26 @@ fn text_area(font: Arc<SDFFont>, text: String, path: PathBuf) -> UiBundle {
     .with(TextInput::new(text).multiline())
     .with(OpenFile { path, dirty: false })
     .interactive()
+}
+
+fn mark_dirty(world: World, changed: Event<ValueChange<String>>) {
+    for ValueChange { entity, .. } in changed.read() {
+        if let Ok(Some(mut file)) = world.handle(entity).get::<&mut OpenFile>() {
+            file.dirty = true;
+        }
+    }
+}
+
+fn save_files(input: Res<UiInput>, mut files: Query<(&'static mut OpenFile, &'static TextInput)>) {
+    let command = if cfg!(target_os = "macos") { input.modifiers.super_key() } else { input.modifiers.control_key() };
+    let pressed_s = input.keys.iter().any(|(key, _)| matches!(key, Key::Character(c) if c.eq_ignore_ascii_case("s")));
+    if !(command && pressed_s) { return }
+
+    while let Ok(Some((_, (mut file, field)))) = files.next() {
+        if !file.dirty { continue }
+        match LocalFileSource.write_file_text(file.path.clone(), field.text.clone()) {
+            Ok(()) => file.dirty = false,
+            Err(err) => log::error!("{err:#}"),
+        }
+    }
 }

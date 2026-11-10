@@ -2,13 +2,13 @@ use std::path::PathBuf;
 
 use gearbox::anyhow::{self, Context};
 
-use crate::sources::{FileList, FileSource};
+use crate::sources::{FileList, Source};
 
 /// A translator `FileSource for any `neb_fs::FileSystem`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LocalFileSource;
 
-impl FileSource for LocalFileSource {
+impl Source for LocalFileSource {
     fn list_files(&self, path: PathBuf) -> anyhow::Result<FileList> {
         let entries = std::fs::read_dir(&path).with_context(|| format!("Couldn't list {}", path.display()))?;
 

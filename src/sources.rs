@@ -10,7 +10,7 @@ pub struct FileList {
 }
 
 /// A source of all files that can be viewed / edited.
-pub trait FileSource {
+pub trait Source {
     /// Async: List all files at a path.
     fn list_files(&self, path: PathBuf) -> anyhow::Result<FileList>;
 

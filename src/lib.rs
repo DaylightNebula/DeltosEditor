@@ -137,8 +137,11 @@ impl DeltosEditor {
             .copied()
             .or_else(|| self.default_editor);
 
-        if self.tiles.values().any(|a| a.tabs.contains_key(&file_id)) {
-            println!("TODO focus tab {file_id}");
+        let open_in = self.tiles.iter()
+            .find(|(_, tile)| tile.tabs.contains_key(&file_id))
+            .map(|(tile_id, _)| *tile_id);
+        if let Some(tile_id) = open_in {
+            self.focus_tab(world, tile_id, file_id);
             return;
         }
 

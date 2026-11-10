@@ -3,7 +3,7 @@ use std::{fmt::Debug, path::PathBuf};
 use gearbox::ui::UiBundle;
 use uuid::Uuid;
 
-use crate::{EDITOR_UUID_NAMESPACE, sources::FileSource};
+use crate::{EDITOR_UUID_NAMESPACE, sources::Source};
 
 pub mod text;
 
@@ -19,5 +19,5 @@ pub trait FileEditor: Debug + Send {
     fn file_types(&self) -> Vec<String>;
 
     /// Supplier of a future to a bundle that represents the editor of a file.
-    fn build_editor(&mut self, source: &dyn FileSource, path: PathBuf) -> UiBundle;
+    fn build_editor(&mut self, source: &dyn Source, path: PathBuf) -> UiBundle;
 }

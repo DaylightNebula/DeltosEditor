@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anarchy::*;
 use gearbox::{glam::{Vec2, Vec4}, ui::*, *};
@@ -8,7 +8,7 @@ use winit::window::{CursorIcon, ResizeDirection};
 #[cfg(windows)]
 use winit::platform::windows::WindowAttributesExtWindows;
 
-use crate::{DeltosEditor, render::{self, *}};
+use crate::{DeltosEditor, TAB_UUID_NAMESPACE, editors::text::OpenFile, render::{self, *}};
 
 pub const MENU_HOVER: Vec4 = Vec4::new(0.09, 0.09, 0.09, 1.0);
 pub const TAB_SCROLL_PER_NOTCH: f32 = 48.0;
@@ -16,6 +16,8 @@ pub const GRIP: f32 = 5.0;
 pub const FOLDER_CLOSED: &str = "\u{ea83}";
 pub const FOLDER_OPEN: &str = "\u{eaf7}";
 pub const FILE_ICON: &str = "\u{eb60}";
+pub const DIRTY_ICON: &str = "\u{ea71}";
+pub const CLOSE_ICON: &str = "\u{ea76}";
 pub const INDENT: f32 = 14.0;
 
 pub struct WindowPlugin;
@@ -37,6 +39,7 @@ impl Plugin for WindowPlugin {
             .on_render_update(open_folders)
             .on_render_update(click_files)
             .on_render_update(click_tabs)
+            .on_render_update(show_dirty_tabs)
     }
 }
 
@@ -191,6 +194,27 @@ fn click_tabs(world: World, mut editor: ResMut<DeltosEditor>, input: Res<UiInput
     else if let Some(tab) = focus { editor.focus_tab(&world, tab.0, tab.1) }
 }
 
+/// Shows a dot in place of a tab's × while its file has unsaved changes, and the × again
+/// while the pointer is over it so the tab can still be closed.
+fn show_dirty_tabs(world: World) {
+    let dirty: Vec<Uuid> = Query::<&OpenFile>::new(&world).iter()
+        .filter(|(_, file)| file.dirty)
+        .map(|(_, file)| tab_id_for(&file.path))
+        .collect();
+
+    let mut buttons = Query::<(&TabCloseButton, &Interaction, &mut Node)>::new(&world);
+    while let Ok(Some((_, (button, interaction, mut node)))) = buttons.next() {
+        let glyph = if dirty.contains(&button.tab_id) && *interaction == Interaction::None { DIRTY_ICON } else { CLOSE_ICON };
+
+        // only touch the style when the glyph actually changes
+        if node.style().text().as_ref().is_some_and(|text| text.content != glyph)
+            && let Some(text) = node.style_mut().text_mut()
+        {
+            text.content = glyph.to_string();
+        }
+    }
+}
+
 /// Starts resizing the window when an edge is pressed, shows the matching arrows over it, and
 /// hides the edges while the window is maximized.
 fn resize_window(input: Res<UiInput>, graphics: Res<Graphics>, mut cursor: ResMut<WindowCursor>,
@@ -223,4 +247,8 @@ fn resize_cursor(direction: ResizeDirection) -> CursorIcon {
         NorthWest | SouthEast => CursorIcon::NwseResize,
         NorthEast | SouthWest => CursorIcon::NeswResize,
     }
+}
+
+fn tab_id_for(path: &Path) -> Uuid {
+    Uuid::new_v5(&TAB_UUID_NAMESPACE, path.as_os_str().as_encoded_bytes())
 }

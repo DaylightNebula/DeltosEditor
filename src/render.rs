@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use gearbox::{glam::*, ui::*};
 use winit::window::ResizeDirection;
 
-use crate::{DeltosEditor, EditorTab, EditorTile, colors, hover::HoverStyle, sources::{FileSource, local::LocalFileSource}, window::*};
+use crate::{DeltosEditor, EditorTab, EditorTile, colors, hover::HoverStyle, sources::{Source, local::LocalFileSource}, window::*};
 
 pub fn render(editor: &DeltosEditor) -> UiBundle {
     let tile = editor.tiles.values().next().unwrap();
@@ -158,6 +158,8 @@ fn tab_strip(editor: &DeltosEditor, tile: &EditorTile) -> UiBundle {
 }
 
 pub(crate) fn tab(editor: &DeltosEditor, tile: &EditorTile, tab: &EditorTab) -> UiBundle {
+    let active = tile.editor_tab == Some(tab.id);
+
     UiBundle::new(Node::row()
         .align(AlignItems::Center)
         .gap(px(12.0))
@@ -166,7 +168,7 @@ pub(crate) fn tab(editor: &DeltosEditor, tile: &EditorTile, tab: &EditorTab) -> 
         .border_sides(Rect::new(px(1.5), px(0.0), px(1.5), px(1.5)), colors::bg3)
         .background(if tile.editor_tab.is_some() && tile.editor_tab.unwrap() == tab.id { colors::bg4 } else { colors::bg2 }))
         .with(TabItem { tile_id: tile.id, tab_id: tab.id })
-        .with(HoverStyle::new(colors::bg4))
+        .with(HoverStyle::new(colors::bg4).base(if active { colors::bg4 } else { colors::bg2 }))
         .interactive()
         .children([
             UiBundle::new(Node::new())
