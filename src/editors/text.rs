@@ -4,11 +4,18 @@ use anarchy::*;
 use gearbox::{App, Plugin, ui::*};
 use winit::keyboard::Key;
 
-use crate::{DeltosEditor, colors, editors::FileEditor, sources::{Source, local::LocalFileSource}};
+use crate::{DeltosEditor, colors, editors::FileEditor, sources::Source};
+use uuid::Uuid;
 
 /// Marks the node holding an open file's text.
+///
+/// Fields:
+/// * source: ID of the `Source` the file was loaded from and is saved to.
+/// * path: Path of the file inside its source.
+/// * dirty: Whether the text has unsaved changes.
 #[derive(Debug, Clone, Component)]
 pub struct OpenFile {
+    pub source: Uuid,
     pub path: PathBuf,
     pub dirty: bool,
 }
@@ -45,14 +52,15 @@ impl FileEditor for SimpleTextDeltosEditor {
     fn build_editor(&mut self, source: &dyn Source, path: PathBuf) -> UiBundle {
         let font = self.font.clone();
         match source.read_file_text(path.clone()) {
-            Ok(text) => text_area(font, text, path),
+            Ok(text) => text_area(font, text, source.id(), path),
             Err(err) => UiBundle::new(Node::new().padding(Rect::single(px(12.0))))
                 .text(Text::new(font, &format!("Couldn't open {}: {err:#}", path.display()), colors::red, 14.0)),
         }
     }
 }
 
-fn text_area(font: Arc<SDFFont>, text: String, path: PathBuf) -> UiBundle {
+/// Builds the editable text area for a file loaded from `source`.
+fn text_area(font: Arc<SDFFont>, text: String, source: Uuid, path: PathBuf) -> UiBundle {
     UiBundle::new(
         Node::new()
             .grow(1.0)
@@ -64,7 +72,7 @@ fn text_area(font: Arc<SDFFont>, text: String, path: PathBuf) -> UiBundle {
     )
     .text(Text::new(font, "", colors::fg0, 14.0))
     .with(TextInput::new(text).multiline())
-    .with(OpenFile { path, dirty: false })
+    .with(OpenFile { source, path, dirty: false })
     .interactive()
 }
 
@@ -76,14 +84,19 @@ fn mark_dirty(world: World, changed: Event<ValueChange<String>>) {
     }
 }
 
-fn save_files(input: Res<UiInput>, mut files: Query<(&'static mut OpenFile, &'static TextInput)>) {
+/// Writes every dirty file back to its source when save is pressed.
+fn save_files(editor: Res<DeltosEditor>, input: Res<UiInput>, mut files: Query<(&'static mut OpenFile, &'static TextInput)>) {
     let command = if cfg!(target_os = "macos") { input.modifiers.super_key() } else { input.modifiers.control_key() };
     let pressed_s = input.keys.iter().any(|(key, _)| matches!(key, Key::Character(c) if c.eq_ignore_ascii_case("s")));
     if !(command && pressed_s) { return }
 
     while let Ok(Some((_, (mut file, field)))) = files.next() {
         if !file.dirty { continue }
-        match LocalFileSource.write_file_text(file.path.clone(), field.text.clone()) {
+        let Some(source) = editor.sources.get(&file.source) else {
+            log::error!("Couldn't save {}: unknown source {}", file.path.display(), file.source);
+            continue;
+        };
+        match source.write_file_text(file.path.clone(), field.text.clone()) {
             Ok(()) => file.dirty = false,
             Err(err) => log::error!("{err:#}"),
         }

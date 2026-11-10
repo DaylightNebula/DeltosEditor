@@ -11,7 +11,6 @@ use uuid::{Uuid, uuid};
 use crate::editors::FileEditor;
 use crate::hover::HoverPlugin;
 use crate::sources::Source;
-use crate::sources::local::LocalFileSource;
 use crate::window::{EditorContainer, TabStrip, WindowPlugin};
 
 pub const SOURCE_UUID_NAMESPACE: Uuid = uuid!("c007d5db-1320-45a4-9f70-163706d055ea");
@@ -27,14 +26,31 @@ pub mod window;
 
 /// The primary plugin for `Deltos` editors.  This initializes all core
 /// requirements for the `DeltosEditor`.
-pub struct DeltosPlugin { font: Arc<SDFFont> }
+///
+/// Fields:
+/// * font: Font used by the whole editor.
+/// * sources: Sources added to the `DeltosEditor` when it is created, so they are available
+///   before the editor's UI is first built.
+pub struct DeltosPlugin { font: Arc<SDFFont>, sources: Vec<Box<dyn Source>> }
 
 impl DeltosPlugin {
     /// Create a new `DeltosPlugin` that uses the given font
     /// for the editor.  If you do not have a font to provide
     /// use the `default` function.
     pub fn new(font: SDFFont) -> Self {
-        Self { font: Arc::new(font) }
+        Self { font: Arc::new(font), sources: Vec::new() }
+    }
+
+    /// Adds a source that the `DeltosEditor` starts with.
+    ///
+    /// Sources added here are registered before any startup system runs, so the file tree
+    /// shows them when the editor's UI is first built.
+    ///
+    /// # Parameters
+    /// * source: The source to add to the editor.
+    pub fn with_source(mut self, source: impl Source + 'static) -> Self {
+        self.sources.push(Box::new(source));
+        self
     }
 }
 
@@ -49,12 +65,18 @@ impl Default for DeltosPlugin {
 
 impl Plugin for DeltosPlugin {
     fn build(self, app: App) -> App {
+        // build the editor with every source given to this plugin
+        let mut editor = DeltosEditor::new(self.font.clone());
+        for source in self.sources {
+            editor.add_source(source);
+        }
+
         app .add_plugin(GearboxRenderPlugin)
             .add_plugin(UIPlugin)
             .add_plugin(WidgetPlugin::new(self.font.clone()))
             .add_plugin(WindowPlugin)
             .add_plugin(HoverPlugin)
-            .add_resource(DeltosEditor::new(self.font.clone()))
+            .add_resource(editor)
     }
 }
 
@@ -80,9 +102,17 @@ pub struct EditorTile {
 
 /// A container of all information of an active editor.
 /// Brings together a tabs information and there parent `FileEditor`.
+///
+/// Fields:
+/// * id: Unique ID of this tab.
+/// * name: Display name of this tab.
+/// * source: ID of the `Source` the tab's file is loaded from.
+/// * path: Path of the tab's file inside its source.
+/// * editor: ID of the `FileEditor` used for the tab, if any.
 pub struct EditorTab {
     pub id: Uuid,
     pub name: String,
+    pub source: Uuid,
     pub path: PathBuf,
     pub editor: Option<Uuid>
 }
@@ -92,6 +122,7 @@ impl Debug for EditorTab {
         f.debug_struct("EditorTab")
             .field("id", &self.id)
             .field("name", &self.name)
+            .field("source", &self.source)
             .finish()
     }
 }
@@ -130,7 +161,7 @@ impl DeltosEditor {
         self.sources.insert(source.id(), source);
     }
 
-    pub fn open_tab(&mut self, world: &World, path: &PathBuf) {
+    pub fn open_tab(&mut self, world: &World, source: Uuid, path: &PathBuf) {
         let file_id = Uuid::new_v5(&TAB_UUID_NAMESPACE, path.as_os_str().as_encoded_bytes());
 
         let file_name = path.file_name()
@@ -157,7 +188,7 @@ impl DeltosEditor {
 
         let tile_id = {
             let Some((tile_id, tile)) = self.tiles.iter_mut().next() else { return };
-            tile.tabs.insert(file_id, EditorTab { id: file_id, name: file_name, path: path.clone(), editor });
+            tile.tabs.insert(file_id, EditorTab { id: file_id, name: file_name, source, path: path.clone(), editor });
             *tile_id
         };
         self.rebuild_containers(world, tile_id, Some(file_id));
@@ -249,9 +280,11 @@ impl DeltosEditor {
             else { return };
         let Some(editor) = self.editors.get_mut(editor_id)
             else { return };
+        let Some(source) = self.sources.get(&tab.source)
+            else { return };
 
         // build, spawn and append new editor
-        let bundle = editor.build_editor(&LocalFileSource, tab.path.clone());
+        let bundle = editor.build_editor(source.as_ref(), tab.path.clone());
         let child = world.spawn(bundle.into_entity_builder());
         let _ = world.hierarchy().add_child(entity_id, child);
     }

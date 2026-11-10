@@ -19,6 +19,7 @@ pub const FILE_ICON: &str = "\u{eb60}";
 pub const DIRTY_ICON: &str = "\u{ea71}";
 pub const CLOSE_ICON: &str = "\u{ea76}";
 pub const INDENT: f32 = 14.0;
+pub const SOURCE_GAP: f32 = 16.0;
 
 pub struct WindowPlugin;
 impl Plugin for WindowPlugin {
@@ -77,15 +78,29 @@ pub struct ResizeEdge(pub ResizeDirection);
 #[derive(Debug, Resource)]
 pub struct WindowCursor(pub CursorIcon);
 
+/// A folder row in the file tree.
+///
+/// Fields:
+/// * source: ID of the `Source` the folder belongs to.
+/// * path: Path of the folder inside its source.
+/// * depth: How deep the folder is nested in the tree.
+/// * loaded: Whether the folder's contents have been listed yet.
 #[derive(Debug, Clone, Component)]
 pub struct FolderItem {
+    pub source: Uuid,
     pub path: PathBuf,
     pub depth: usize,
     pub loaded: bool,
 }
 
+/// A file row in the file tree.
+///
+/// Fields:
+/// * source: ID of the `Source` the file belongs to.
+/// * path: Path of the file inside its source.
 #[derive(Debug, Clone, Component)]
 pub struct FileItem {
+    pub source: Uuid,
     pub path: PathBuf
 }
 
@@ -148,7 +163,7 @@ fn open_folders(world: World, editor: Res<DeltosEditor>, toggled: Event<ValueCha
         let Ok(Some(mut folder)) = world.handle(entity).get::<&mut FolderItem>() else { continue };
         let load = open && !folder.loaded;
         folder.loaded |= open;
-        let (path, depth) = (folder.path.clone(), folder.depth);
+        let (source, path, depth) = (folder.source, folder.path.clone(), folder.depth);
 
         // release the component before spawning into the world
         drop(folder);
@@ -164,7 +179,7 @@ fn open_folders(world: World, editor: Res<DeltosEditor>, toggled: Event<ValueCha
         }
 
         if load {
-            for item in folder_contents(&editor, &path, depth + 1) {
+            for item in folder_contents(&editor, source, &path, depth + 1) {
                 world.spawn_with_parent(Some(content), item.into_entity_builder());
             }
         }
@@ -176,8 +191,11 @@ fn click_files(world: World, mut editor: ResMut<DeltosEditor>, input: Res<UiInpu
     let Some(id) = input.hovered else { return };
     if !input.activated(id) { return }
     let Ok(Some(file)) = world.handle(id).get::<&FileItem>() else { return };
+    let (source, path) = (file.source, file.path.clone());
 
-    editor.open_tab(&world, &file.path);
+    // release the component before the editor spawns into the world
+    drop(file);
+    editor.open_tab(&world, source, &path);
 }
 
 /// Open a tab on click.
