@@ -10,9 +10,11 @@ use uuid::{Uuid, uuid};
 
 use crate::editors::FileEditor;
 use crate::hover::HoverPlugin;
+use crate::sources::Source;
 use crate::sources::local::LocalFileSource;
 use crate::window::{EditorContainer, TabStrip, WindowPlugin};
 
+pub const SOURCE_UUID_NAMESPACE: Uuid = uuid!("c007d5db-1320-45a4-9f70-163706d055ea");
 pub const EDITOR_UUID_NAMESPACE: Uuid = uuid!("dcf01b57-1883-4daf-a843-49e6a0bfdc27");
 pub const TAB_UUID_NAMESPACE: Uuid = uuid!("fefe4e8b-7e6b-4e1b-a728-249b6b052d71");
 
@@ -61,6 +63,7 @@ impl Plugin for DeltosPlugin {
 pub struct DeltosEditor {
     pub title: String,
     pub font: Arc<SDFFont>,
+    pub sources: AHashMap<Uuid, Box<dyn Source>>,
     pub tiles: AHashMap<Uuid, EditorTile>,
     pub editors: AHashMap<Uuid, Box<dyn FileEditor>>,
     pub file_type_editor_lookup: AHashMap<String, Uuid>,
@@ -102,12 +105,14 @@ impl DeltosEditor {
         Self {
             font, tiles,
             title: "Deltos Editor".to_string(),
+            sources: AHashMap::default(),
             editors: AHashMap::default(),
             file_type_editor_lookup: AHashMap::default(),
             default_editor: None
         }
     }
 
+    /// Add an editor to this `DeltosEditor`.
     pub fn add_editor(&mut self, editor: Box<dyn FileEditor>, can_be_default: bool) {
         if self.default_editor.is_none() && can_be_default {
             self.default_editor = Some(editor.id());
@@ -118,6 +123,11 @@ impl DeltosEditor {
         }
 
         self.editors.insert(editor.id(), editor);
+    }
+
+    /// Add a source to this `DeltosEditor`.
+    pub fn add_source(&mut self, source: Box<dyn Source>) {
+        self.sources.insert(source.id(), source);
     }
 
     pub fn open_tab(&mut self, world: &World, path: &PathBuf) {

@@ -9,6 +9,11 @@ use crate::sources::{FileList, Source};
 pub struct LocalFileSource;
 
 impl Source for LocalFileSource {
+
+    fn name(&self) -> String {
+        "Local Files".to_string()
+    }
+
     fn list_files(&self, path: PathBuf) -> anyhow::Result<FileList> {
         let entries = std::fs::read_dir(&path).with_context(|| format!("Couldn't list {}", path.display()))?;
 

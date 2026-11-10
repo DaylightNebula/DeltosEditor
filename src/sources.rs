@@ -1,6 +1,9 @@
-use std::path::PathBuf;
+use std::{fmt::Debug, path::PathBuf};
 
 use gearbox::anyhow::self;
+use uuid::Uuid;
+
+use crate::SOURCE_UUID_NAMESPACE;
 
 pub mod local;
 
@@ -10,7 +13,14 @@ pub struct FileList {
 }
 
 /// A source of all files that can be viewed / edited.
-pub trait Source {
+pub trait Source: Debug + Send {
+
+    /// The unique ID of this source.
+    fn id(&self) -> Uuid { Uuid::new_v5(&SOURCE_UUID_NAMESPACE, self.name().as_bytes()) }
+
+    /// The display name of this source.
+    fn name(&self) -> String;
+
     /// Async: List all files at a path.
     fn list_files(&self, path: PathBuf) -> anyhow::Result<FileList>;
 
