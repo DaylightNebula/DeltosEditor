@@ -4,7 +4,7 @@ use anarchy::*;
 use gearbox::{App, Plugin, ui::*};
 use winit::keyboard::Key;
 
-use crate::{DeltosEditor, colors, editors::FileEditor, sources::Source};
+use crate::{DeltosEditor, editors::FileEditor, sources::Source, theme::Theme};
 use uuid::Uuid;
 
 /// Marks the node holding an open file's text.
@@ -49,18 +49,18 @@ impl FileEditor for SimpleTextDeltosEditor {
         ["txt", "md", "toml", "json"].map(String::from).to_vec()
     }
 
-    fn build_editor(&mut self, source: &dyn Source, path: PathBuf) -> UiBundle {
+    fn build_editor(&mut self, theme: &Theme, source: &dyn Source, path: PathBuf) -> UiBundle {
         let font = self.font.clone();
         match source.read_file_text(path.clone()) {
-            Ok(text) => text_area(font, text, source.id(), path),
+            Ok(text) => text_area(theme, font, text, source.id(), path),
             Err(err) => UiBundle::new(Node::new().padding(Rect::single(px(12.0))))
-                .text(Text::new(font, &format!("Couldn't open {}: {err:#}", path.display()), colors::red, 14.0)),
+                .text(Text::new(font, &format!("Couldn't open {}: {err:#}", path.display()), theme.red, 14.0)),
         }
     }
 }
 
 /// Builds the editable text area for a file loaded from `source`.
-fn text_area(font: Arc<SDFFont>, text: String, source: Uuid, path: PathBuf) -> UiBundle {
+fn text_area(theme: &Theme, font: Arc<SDFFont>, text: String, source: Uuid, path: PathBuf) -> UiBundle {
     UiBundle::new(
         Node::new()
             .grow(1.0)
@@ -68,10 +68,10 @@ fn text_area(font: Arc<SDFFont>, text: String, source: Uuid, path: PathBuf) -> U
             .min_width(px(0.0))
             .min_height(px(0.0))
             .padding(Rect::single(px(12.0)))
-            .background(colors::bg0)
-            .border(1.5, colors::bg4)
+            .background(theme.bg_0)
+            .border(1.5, theme.bg_4)
     )
-    .text(Text::new(font, "", colors::fg0, 14.0))
+    .text(Text::new(font, "", theme.bg_8, 14.0))
     .with(TextInput::new(text).multiline())
     .with(OpenFile { source, path, dirty: false })
     .interactive()

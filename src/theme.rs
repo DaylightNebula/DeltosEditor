@@ -2,38 +2,61 @@
 
 use gearbox::glam::Vec4;
 
-pub const bg0: Vec4 = hex_to_srgb("#191919");
-pub const bg1: Vec4 = hex_to_srgb("#1d1d1d");
-pub const bg2: Vec4 = hex_to_srgb("#222222");
-pub const bg3: Vec4 = hex_to_srgb("#272727");
-pub const bg4: Vec4 = hex_to_srgb("#2b2b2b");
-pub const bg_statusline1: Vec4 = hex_to_srgb("#282828");
-pub const bg_statusline2: Vec4 = hex_to_srgb("#32302f");
-pub const bg_statusline3: Vec4 = hex_to_srgb("#504945");
-pub const bg_visual_red: Vec4 = hex_to_srgb("#442e2d");
-pub const bg_visual_yellow: Vec4 = hex_to_srgb("#473c29");
-pub const bg_visual_green: Vec4 = hex_to_srgb("#333e34");
-pub const bg_visual_blue: Vec4 = hex_to_srgb("#2e3b3b");
-pub const bg_visual_purple: Vec4 = hex_to_srgb("#3c333b");
-pub const bg_diff_red: Vec4 = hex_to_srgb("#3c1f1e");
-pub const bg_diff_green: Vec4 = hex_to_srgb("#32361a");
-pub const bg_diff_blue: Vec4 = hex_to_srgb("#0d3138");
-pub const bg_current_word: Vec4 = hex_to_srgb("#32302f");
-pub const fg0: Vec4 = hex_to_srgb("#d4be98");
-pub const fg1: Vec4 = hex_to_srgb("#ddc7a1");
-pub const red: Vec4 = hex_to_srgb("#ea6962");
-pub const orange: Vec4 = hex_to_srgb("#e78a4e");
-pub const yellow: Vec4 = hex_to_srgb("#d8a657");
-pub const green: Vec4 = hex_to_srgb("#a9b665");
-pub const aqua: Vec4 = hex_to_srgb("#89b482");
-pub const blue: Vec4 = hex_to_srgb("#7daea3");
-pub const purple: Vec4 = hex_to_srgb("#d3869b");
-pub const bg_red: Vec4 = hex_to_srgb("#ea6962");
-pub const bg_green: Vec4 = hex_to_srgb("#a9b665");
-pub const bg_yellow: Vec4 = hex_to_srgb("#d8a657");
-pub const grey0: Vec4 = hex_to_srgb("#7c6f64");
-pub const grey1: Vec4 = hex_to_srgb("#928374");
-pub const grey2: Vec4 = hex_to_srgb("#a89984");
+/// The standard Deltos Editor colors.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Theme {
+    pub bg_0: Vec4,
+    pub bg_1: Vec4,
+    pub bg_2: Vec4,
+    pub bg_3: Vec4,
+    pub bg_4: Vec4,
+    pub bg_5: Vec4,
+    pub bg_6: Vec4,
+    pub bg_7: Vec4,
+    pub bg_8: Vec4,
+    pub bg_9: Vec4,
+    pub red: Vec4,
+    pub orange: Vec4,
+    pub yellow: Vec4,
+    pub green: Vec4,
+    pub aqua: Vec4,
+    pub blue: Vec4,
+    pub purple: Vec4,
+    pub bg_red: Vec4,
+    pub bg_yellow: Vec4,
+    pub bg_green: Vec4,
+    pub bg_blue: Vec4,
+    pub bg_purple: Vec4,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Theme {
+            bg_0: hex_to_srgb("#191919"),
+            bg_1: hex_to_srgb("#1d1d1d"),
+            bg_2: hex_to_srgb("#222222"),
+            bg_3: hex_to_srgb("#272727"),
+            bg_4: hex_to_srgb("#2b2b2b"),
+            bg_5: hex_to_srgb("#7c6f64"),
+            bg_6: hex_to_srgb("#928374"),
+            bg_7: hex_to_srgb("#a89984"),
+            bg_8: hex_to_srgb("#d4be98"),
+            bg_9: hex_to_srgb("#ddc7a1"),
+            red: hex_to_srgb("#ea6962"),
+            orange: hex_to_srgb("#e78a4e"),
+            yellow: hex_to_srgb("#d8a657"),
+            green: hex_to_srgb("#a9b665"),
+            aqua: hex_to_srgb("#89b482"),
+            blue: hex_to_srgb("#7daea3"),
+            purple: hex_to_srgb("#d3869b"),
+            bg_red:  hex_to_srgb("#442e2d"),
+            bg_yellow: hex_to_srgb("#473c29"),
+            bg_green: hex_to_srgb("#333e34"),
+            bg_blue: hex_to_srgb("#2e3b3b"),
+            bg_purple: hex_to_srgb("#3c333b"),
+        }
+    }
+}
 
 /// `"#rrggbb"` as the linear color the UI draws with, like gearbox's `srgb`.
 pub const fn hex_to_srgb(string: &str) -> Vec4 {

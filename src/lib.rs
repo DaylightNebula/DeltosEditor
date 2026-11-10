@@ -11,17 +11,18 @@ use uuid::{Uuid, uuid};
 use crate::editors::FileEditor;
 use crate::hover::HoverPlugin;
 use crate::sources::Source;
+use crate::theme::Theme;
 use crate::window::{EditorContainer, TabStrip, WindowPlugin};
 
 pub const SOURCE_UUID_NAMESPACE: Uuid = uuid!("c007d5db-1320-45a4-9f70-163706d055ea");
 pub const EDITOR_UUID_NAMESPACE: Uuid = uuid!("dcf01b57-1883-4daf-a843-49e6a0bfdc27");
 pub const TAB_UUID_NAMESPACE: Uuid = uuid!("fefe4e8b-7e6b-4e1b-a728-249b6b052d71");
 
-pub mod colors;
 pub mod editors;
 pub mod hover;
 pub mod render;
 pub mod sources;
+pub mod theme;
 pub mod window;
 
 /// The primary plugin for `Deltos` editors.  This initializes all core
@@ -85,6 +86,7 @@ impl Plugin for DeltosPlugin {
 pub struct DeltosEditor {
     pub title: String,
     pub font: Arc<SDFFont>,
+    pub theme: Theme,
     pub sources: AHashMap<Uuid, Box<dyn Source>>,
     pub tiles: AHashMap<Uuid, EditorTile>,
     pub editors: AHashMap<Uuid, Box<dyn FileEditor>>,
@@ -136,6 +138,7 @@ impl DeltosEditor {
         Self {
             font, tiles,
             title: "Deltos Editor".to_string(),
+            theme: Theme::default(),
             sources: AHashMap::default(),
             editors: AHashMap::default(),
             file_type_editor_lookup: AHashMap::default(),
@@ -282,9 +285,10 @@ impl DeltosEditor {
             else { return };
         let Some(source) = self.sources.get(&tab.source)
             else { return };
+        let path = tab.path.clone();
 
         // build, spawn and append new editor
-        let bundle = editor.build_editor(source.as_ref(), tab.path.clone());
+        let bundle = editor.build_editor(&self.theme, source.as_ref(), path);
         let child = world.spawn(bundle.into_entity_builder());
         let _ = world.hierarchy().add_child(entity_id, child);
     }

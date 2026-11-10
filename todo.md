@@ -4,7 +4,7 @@
 [x] Generalize hover code
 [x] Tab hovers
 [x] Make active tab have a different color
-[ ] Standard theme format that can be assigned in DeltosEditor
+[x] Standard theme format that can be assigned in DeltosEditor
 [ ] Async sources and other traits
 [ ] Extendable center elements in top bar
 [ ] File panel open and close button
