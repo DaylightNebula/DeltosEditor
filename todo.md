@@ -1,6 +1,6 @@
 [x] Move tab and tab strip control to editor containers
 [x] Save text edits in plain text editor
-[ ] Assign file sources to DeltosEditor with list is file list
+[x] Assign file sources to DeltosEditor with list is file list
 [x] Generalize hover code
 [x] Tab hovers
 [x] Make active tab have a different color
@@ -12,8 +12,8 @@
 [ ] Ability to move tabs into seperate containers
 [ ] Ability to drag and resize left and right panels
 
-[ ] Bug: Fix scrolling in file source list
-[ ] Bug: Fix scrolling in plain text editor
+[x] Bug: Fix scrolling in file source list
+[x] Bug: Fix scrolling in plain text editor
 [x] Bug: Replace "TODO focus tab" message
 
 [ ] Investigate: LSP support (maybe should be controlled by the FileEditor trait)
