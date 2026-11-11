@@ -1,6 +1,6 @@
 use anarchy::{ResMut, SystemPin, World, pin};
 use deltos::{DeltosEditor, DeltosPlugin, editors::text::SimpleTextDeltosEditorPlugin, sources::local::LocalFileSource, top_bar::TopBarElement};
-use gearbox::{App, anyhow, ui::{Node, Text, UiBundle}};
+use gearbox::{App, anyhow, ui::{Align, Node, Text, UiBundle}};
 
 fn main() -> anyhow::Result<()> {
     App::new()
@@ -11,10 +11,14 @@ fn main() -> anyhow::Result<()> {
 }
 
 #[derive(Debug)]
-pub struct TestTopBarElement;
+pub struct TestTopBarElement(Align);
 impl TopBarElement for TestTopBarElement {
     fn name(&self) -> String {
         "TEST TOP BAR".to_string()
+    }
+
+    fn alignment(&self) -> Align {
+        self.0
     }
 
     fn build(&self, _: &World, editor: &DeltosEditor) -> UiBundle {
@@ -24,5 +28,7 @@ impl TopBarElement for TestTopBarElement {
 }
 
 fn setup(mut editor: ResMut<DeltosEditor>) {
-    editor.add_top_bar(Box::new(TestTopBarElement));
+    editor.add_top_bar(Box::new(TestTopBarElement(Align::Start)));
+    editor.add_top_bar(Box::new(TestTopBarElement(Align::Center)));
+    editor.add_top_bar(Box::new(TestTopBarElement(Align::End)));
 }

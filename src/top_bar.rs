@@ -13,13 +13,17 @@ pub trait TopBarElement: Debug + Send {
     /// The name of this element.
     fn name(&self) -> String;
 
+    /// Should this element be placed at the start, end, or center of the top bar
+    fn alignment(&self) -> Align;
+
     /// The build a UiBundle for this element from a `World` and `DeltosEditor`.
     fn build(&self, world: &World, editor: &DeltosEditor) -> UiBundle;
 }
 
 pub(crate) fn render(world: &World, editor: &DeltosEditor) -> UiBundle {
-    let mut mid_children = Vec::new();
-    mid_children.push(center_spacer());
+    let mut slot_children = AHashMap::<Align, Vec<UiBundle>>::new();
+
+    slot_children.entry(Align::Center).push(center_spacer());
 
     for top_bar in editor.top_bars.values() {
         mid_children.push(top_bar.build(world, editor));
@@ -35,7 +39,7 @@ pub(crate) fn render(world: &World, editor: &DeltosEditor) -> UiBundle {
         .child(
             UiBundle::new(Node::row())
                 .child(
-                    UiBundle::new(Node::row()
+                    UiBundle::new(Node::new()
                         .align(AlignItems::Center)
                         .height(Val::Percent(1.0))
                         .padding(Rect::new(px(10.0), px(10.0), px(14.0), px(14.0))))
@@ -45,7 +49,7 @@ pub(crate) fn render(world: &World, editor: &DeltosEditor) -> UiBundle {
                             .with_align(Align::Center, Align::Center))
                 )
                 .child(
-                    UiBundle::new(Node::row()
+                    UiBundle::new(Node::new()
                         .align(AlignItems::Center)
                         .height(Val::Percent(1.0))
                         .padding(Rect::new(px(10.0), px(10.0), px(14.0), px(14.0))))
