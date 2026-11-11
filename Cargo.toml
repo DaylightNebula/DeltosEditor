@@ -9,6 +9,4 @@ gearbox = { path = "../gearbox" }
 
 log = "0.4"
 uuid = { version = "1.29.0", features = ["v4", "v5"] }
-
-[target.'cfg(windows)'.dependencies]
 winit = "0.30"
