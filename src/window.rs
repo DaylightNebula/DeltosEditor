@@ -111,7 +111,7 @@ fn setup(world: World, editor: Res<DeltosEditor>) {
             .push(Camera::default())
     );
 
-    let root = render::render(&editor);
+    let root = render::render(&world, &editor);
 
     world.spawn(root.into_entity_builder());
 }

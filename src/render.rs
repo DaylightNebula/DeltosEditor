@@ -1,12 +1,13 @@
 use std::path::{Path, PathBuf};
 
+use anarchy::World;
 use gearbox::{glam::*, ui::*};
 use winit::window::ResizeDirection;
 
-use crate::{DeltosEditor, EditorTab, EditorTile, hover::HoverStyle, window::*};
+use crate::{DeltosEditor, EditorTab, EditorTile, hover::HoverStyle, top_bar, window::*};
 use uuid::Uuid;
 
-pub fn render(editor: &DeltosEditor) -> UiBundle {
+pub fn render(world: &World, editor: &DeltosEditor) -> UiBundle {
     let tile = editor.tiles.values().next().unwrap();
 
     UiBundle::new(
@@ -18,7 +19,7 @@ pub fn render(editor: &DeltosEditor) -> UiBundle {
         )
         .children([
             // tab bar and top pane
-            top_pane(&editor),
+            top_bar::render(&world, &editor),
 
             // editor pane and central pane, allowed to shrink below their content so they scroll
             // instead of growing past the window
@@ -39,49 +40,6 @@ pub fn render(editor: &DeltosEditor) -> UiBundle {
                     ))
         ])
         .children(resize_edges())
-}
-
-fn top_pane(editor: &DeltosEditor) -> UiBundle {
-    UiBundle::new(Node::row()
-        .width(Val::Percent(1.0))
-        .height(px(40.0))
-        .background(editor.theme.bg_1)
-        .align(AlignItems::Center)
-        .shrink(0.0))
-        .child(
-            UiBundle::new(Node::row())
-                .child(
-                    UiBundle::new(Node::row()
-                        .align(AlignItems::Center)
-                        .height(Val::Percent(1.0))
-                        .padding(Rect::new(px(10.0), px(10.0), px(14.0), px(14.0))))
-                        .with(HoverStyle::new(editor.theme.bg_4))
-                        .interactive()
-                        .text(Text::new(editor.font.clone(), "".to_string(), Vec4::ONE, 18.0)
-                            .with_align(Align::Center, Align::Center))
-                )
-                .child(
-                    UiBundle::new(Node::row()
-                        .align(AlignItems::Center)
-                        .height(Val::Percent(1.0))
-                        .padding(Rect::new(px(10.0), px(10.0), px(14.0), px(14.0))))
-                        .text(Text::new(editor.font.clone(), editor.title.clone(), Vec4::ONE, 14.0)
-                            .with_align(Align::Center, Align::Center))
-                )
-        )
-        .child(
-            UiBundle::new(Node::new()
-                .grow(1.0)
-                .min_width(px(0.0))
-                .height(Val::Percent(1.0)))
-                .with(DragRegion)
-                .interactive()
-        )
-        .children([
-            caption_button(editor, "–", WindowButton::Minimize),
-            caption_button(editor, "󱓼", WindowButton::Maximize),
-            caption_button(editor, "×", WindowButton::Close),
-        ])
 }
 
 /// Builds the file list: one list per source, stacked in a single column.
@@ -216,20 +174,6 @@ pub(crate) fn tab(editor: &DeltosEditor, tile: &EditorTile, tab: &EditorTab) -> 
                 .with(HoverStyle::new(editor.theme.red))
                 .interactive(),
         ])
-}
-
-fn caption_button(editor: &DeltosEditor, label: &str, button: WindowButton) -> UiBundle{
-    UiBundle::new(Node::row()
-        .width(px(46.0))
-        .height(Val::Percent(1.0))
-        .align(AlignItems::Center)
-        .justify(JustifyContent::Center)
-        .shrink(0.0))
-        .with(button)
-        .with(HoverStyle::new(if button == WindowButton::Close { editor.theme.red } else { editor.theme.bg_4 }))
-        .interactive()
-        .text(Text::new(editor.font.clone(), label, Vec4::ONE, 16.0)
-            .with_align(Align::Center, Align::Center))
 }
 
 fn resize_edges() -> Vec<UiBundle> {

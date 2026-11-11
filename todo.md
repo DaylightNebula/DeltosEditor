@@ -6,7 +6,7 @@
 [x] Make active tab have a different color
 [x] Standard theme format that can be assigned in DeltosEditor
 [ ] Async sources and other traits
-[ ] Extendable center elements in top bar
+[x] Extendable center elements in top bar
 [ ] File panel open and close button
 [ ] Extendable right panel
 [ ] Ability to move tabs into seperate containers
