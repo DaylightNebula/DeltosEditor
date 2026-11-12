@@ -25,6 +25,7 @@ pub const TAB_UUID_NAMESPACE: Uuid = uuid!("fefe4e8b-7e6b-4e1b-a728-249b6b052d71
 pub mod editors;
 pub mod hover;
 pub mod render;
+pub mod side_bar;
 pub mod sources;
 pub mod theme;
 pub mod top_bar;
