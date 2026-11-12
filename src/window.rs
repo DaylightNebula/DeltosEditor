@@ -32,7 +32,8 @@ impl Plugin for WindowPlugin {
                 let attribs = attribs.with_corner_preference(winit::platform::windows::CornerPreference::Round);
                 attribs
             })
-            .on_startup(setup)
+            // builds the UI, so it runs after every other startup system has registered its parts
+            .on_startup_with(setup, pin(SystemPin::End))
             .on_render_update(window_buttons)
             .on_render_update(drag_window)
             .on_render_update(scroll_tabs)

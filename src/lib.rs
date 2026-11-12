@@ -13,6 +13,8 @@ use crate::hover::HoverPlugin;
 use crate::sources::Source;
 use crate::theme::Theme;
 use crate::top_bar::TopBarElement;
+use crate::top_bar::title_decor::TitleDecorElement;
+use crate::top_bar::window_decor::TopWindowDecorElement;
 use crate::window::{EditorContainer, TabStrip, WindowPlugin};
 
 pub const TOP_BAR_UUID_NAMESPACE: Uuid = uuid!("db204c32-f0fd-4b55-991a-6fd4ed77f102");
@@ -81,6 +83,10 @@ impl Plugin for DeltosPlugin {
             .add_plugin(WindowPlugin)
             .add_plugin(HoverPlugin)
             .add_resource(editor)
+            .on_startup(|mut editor: ResMut<DeltosEditor>| {
+                editor.add_top_bar(Box::new(TitleDecorElement));
+                editor.add_top_bar(Box::new(TopWindowDecorElement));
+            })
     }
 }
 

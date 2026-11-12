@@ -28,7 +28,5 @@ impl TopBarElement for TestTopBarElement {
 }
 
 fn setup(mut editor: ResMut<DeltosEditor>) {
-    editor.add_top_bar(Box::new(TestTopBarElement(Align::Start)));
     editor.add_top_bar(Box::new(TestTopBarElement(Align::Center)));
-    editor.add_top_bar(Box::new(TestTopBarElement(Align::End)));
 }
