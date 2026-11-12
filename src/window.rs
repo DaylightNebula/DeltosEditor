@@ -8,9 +8,11 @@ use winit::window::{CursorIcon, ResizeDirection};
 #[cfg(windows)]
 use winit::platform::windows::WindowAttributesExtWindows;
 
-use crate::{DeltosEditor, TAB_UUID_NAMESPACE, editors::text::OpenFile, render::self};
+use crate::{DeltosEditor, TAB_UUID_NAMESPACE, editors::text::OpenFile, render::{self, TAB_BAR_HEIGHT}, tiles::DropZone};
 
 pub const MENU_HOVER: Vec4 = Vec4::new(0.09, 0.09, 0.09, 1.0);
+/// How far the pointer must move with a tab held before it starts dragging, in logical pixels.
+pub const TAB_DRAG_THRESHOLD: f32 = 6.0;
 pub const TAB_SCROLL_PER_NOTCH: f32 = 48.0;
 pub const GRIP: f32 = 5.0;
 pub const DIRTY_ICON: &str = "\u{ea71}";
@@ -21,6 +23,7 @@ impl Plugin for WindowPlugin {
     fn build(self, app: App) -> App {
         app
             .add_resource(WindowCursor(CursorIcon::Default))
+            .add_resource(TabDrag::default())
             .with_window_attributes(|attribs| {
                 let attribs = attribs.with_decorations(false);
                 #[cfg(windows)]
@@ -34,6 +37,7 @@ impl Plugin for WindowPlugin {
             .on_render_update(scroll_tabs)
             .on_render_update(resize_window)
             .on_render_update(click_files)
+            .on_render_update(drag_tabs)
             .on_render_update(click_tabs)
             .on_render_update(show_dirty_tabs)
     }
@@ -62,10 +66,64 @@ pub struct TabCloseButton {
     pub tab_id: Uuid
 }
 
+/// The node a tile's shown editor is built into.
+///
+/// Fields:
+/// * tile_id: ID of the tile this container belongs to.
 #[derive(Debug, Clone, Copy, Component)]
 pub struct EditorContainer {
     pub tile_id: Uuid
 }
+
+/// Marks the root node of a built editor, so it can be moved between tiles with its tab.
+///
+/// Fields:
+/// * tab_id: ID of the tab the editor was built for.
+#[derive(Debug, Clone, Copy, Component)]
+pub struct EditorContent {
+    pub tab_id: Uuid
+}
+
+/// The node holding every editor tile, rebuilt whenever the tile layout changes.
+#[derive(Debug, Clone, Copy, Component)]
+pub struct TileArea;
+
+/// The node of one editor tile, holding its tab bar and editor container.
+///
+/// Fields:
+/// * tile_id: ID of the tile this node shows.
+#[derive(Debug, Clone, Copy, Component)]
+pub struct TileNode {
+    pub tile_id: Uuid
+}
+
+/// The highlight over where a dragged tab will be dropped.
+#[derive(Debug, Clone, Copy, Component)]
+pub struct DropPreview;
+
+/// A tab held by the pointer, which becomes a drag once the pointer moves far enough.
+///
+/// Fields:
+/// * tile_id: ID of the tile the tab is in.
+/// * tab_id: ID of the held tab.
+/// * start: Where the pointer pressed the tab, in window pixels.
+/// * dragging: Whether the pointer moved far enough to start dragging.
+/// * target: The tile and zone the tab will drop in, if the pointer is over one.
+#[derive(Debug, Clone, Copy)]
+pub struct HeldTab {
+    pub tile_id: Uuid,
+    pub tab_id: Uuid,
+    pub start: Vec2,
+    pub dragging: bool,
+    pub target: Option<(Uuid, DropZone)>
+}
+
+/// The tab being dragged, if any.
+///
+/// Fields:
+/// * 0: The held tab, `None` while no tab is pressed.
+#[derive(Debug, Default, Resource)]
+pub struct TabDrag(pub Option<HeldTab>);
 
 #[derive(Debug, Clone, Copy, Component)]
 pub struct ResizeEdge(pub ResizeDirection);
@@ -175,6 +233,82 @@ fn click_tabs(world: World, mut editor: ResMut<DeltosEditor>, input: Res<UiInput
 
     if let Some(tab) = close { editor.close_tab(&world, tab.0, tab.1) }
     else if let Some(tab) = focus { editor.focus_tab(&world, tab.0, tab.1) }
+}
+
+/// Drags tabs between tiles: holding a tab and moving the pointer highlights where it will land,
+/// and letting go drops it into that tile, or splits the tile when over one of its edges.
+fn drag_tabs(world: World, mut editor: ResMut<DeltosEditor>, input: Res<UiInput>, mut drag: ResMut<TabDrag>) {
+    // pick up a tab when it is pressed
+    if input.pressed && let Some(id) = input.hovered {
+        let tab = world.handle(id)
+            .get::<&TabItem>()
+            .ok()
+            .flatten()
+            .map(|tab| (tab.tile_id, tab.tab_id));
+        drag.0 = tab.map(|(tile_id, tab_id)| HeldTab { tile_id, tab_id, start: input.cursor, dragging: false, target: None });
+    }
+    let Some(mut held) = drag.0 else { return };
+
+    // drop the tab, or let it go if it never moved far enough to count as a drag
+    if !input.down {
+        drag.0 = None;
+        set_drop_preview(&world, &input, None);
+        if held.dragging && let Some((tile_id, zone)) = held.target {
+            editor.move_tab(&world, held.tile_id, held.tab_id, tile_id, zone);
+        }
+        return;
+    }
+
+    // start dragging once the pointer leaves the threshold around where it pressed
+    let scale = input.scale.max(f32::EPSILON);
+    if !held.dragging && input.cursor.distance(held.start) < TAB_DRAG_THRESHOLD * scale { return }
+    held.dragging = true;
+
+    // find the tile under the pointer and where on it the tab would land
+    let bar = TAB_BAR_HEIGHT * scale;
+    let hit = Query::<(&TileNode, &ComputedNode)>::new(&world)
+        .iter()
+        .find(|(_, (_, computed))| computed.contains(input.cursor))
+        .map(|(_, (tile, computed))| {
+            let content_position = computed.position + Vec2::new(0.0, bar);
+            let content_size = (computed.size - Vec2::new(0.0, bar)).max(Vec2::ZERO);
+
+            // over the tab bar always joins the tile, anywhere else picks by the pointer's spot
+            let zone = if input.cursor.y < content_position.y { DropZone::Center }
+                else { DropZone::at(content_position, content_size, input.cursor) };
+            (tile.tile_id, zone, zone.preview(content_position, content_size))
+        });
+
+    held.target = hit.map(|(tile_id, zone, _)| (tile_id, zone));
+    drag.0 = Some(held);
+    set_drop_preview(&world, &input, hit.map(|(_, _, preview)| preview));
+}
+
+/// Shows the drop highlight over `area`, a position and size in window pixels, or hides it.
+fn set_drop_preview(world: &World, input: &UiInput, area: Option<(Vec2, Vec2)>) {
+    let scale = input.scale.max(f32::EPSILON);
+    let mut previews = Query::<(&DropPreview, &mut Node)>::new(world);
+    while let Ok(Some((_, (_, mut node)))) = previews.next() {
+        let Some((position, size)) = area else {
+            if *node.style().display() != Display::None { node.style_mut().set_display(Display::None); }
+            continue;
+        };
+
+        // styles are in logical pixels, so convert from the window's pixels
+        let (position, size) = (position / scale, size / scale);
+        let edges = Rect::new_top_left(px(position.y), px(position.x));
+        let unchanged = *node.style().display() == Display::Flex
+            && matches!(node.style().position_type(), PositionType::Fixed(now) if *now == edges)
+            && *node.style().width() == px(size.x)
+            && *node.style().height() == px(size.y);
+        if unchanged { continue }
+
+        node.style_mut()
+            .set_display(Display::Flex)
+            .set_position_type(PositionType::Fixed(edges))
+            .set_width(px(size.x))
+            .set_height(px(size.y));
+    }
 }
 
 /// Shows a dot in place of a tab's × while its file has unsaved changes, and the × again

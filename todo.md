@@ -7,10 +7,10 @@
 [x] Standard theme format that can be assigned in DeltosEditor
 [ ] Async sources and other traits
 [x] Extendable center elements in top bar
-[ ] File panel open and close button
-[ ] Extendable right panel
-[ ] Ability to move tabs into seperate containers
-[ ] Ability to drag and resize left and right panels
+[x] File panel open and close button
+[x] Extendable right panel
+[x] Ability to move tabs into seperate containers
+[x] Ability to drag and resize left and right panels
 
 [x] Bug: Fix scrolling in file source list
 [x] Bug: Fix scrolling in plain text editor

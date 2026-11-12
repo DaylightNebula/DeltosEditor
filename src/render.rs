@@ -2,10 +2,17 @@ use anarchy::World;
 use gearbox::{glam::*, ui::*};
 use winit::window::ResizeDirection;
 
-use crate::{DeltosEditor, EditorTab, EditorTile, hover::HoverStyle, side_bar, top_bar, window::*};
+use crate::{DeltosEditor, EditorTab, EditorTile, hover::HoverStyle, side_bar, tiles::{SplitAxis, TileLayout}, top_bar, window::*};
 
+pub const DIVIDER_SIZE: f32 = 1.5;
+pub const TAB_BAR_HEIGHT: f32 = 40.0;
+
+/// Builds the editor's whole UI: the top bar, the side bars and the editor tiles between them.
+///
+/// # Parameters
+/// * world: World passed to the bars' elements as they build.
+/// * editor: Editor whose UI is rendered.
 pub fn render(world: &World, editor: &DeltosEditor) -> UiBundle {
-    let tile = editor.tiles.values().next().unwrap();
     let (left_side_bar, right_side_bar) = side_bar::render_left_right(world, editor);
 
     UiBundle::new(
@@ -25,26 +32,89 @@ pub fn render(world: &World, editor: &DeltosEditor) -> UiBundle {
                 .grow(1.0)
                 .min_height(px(0.0)))
                 .child(left_side_bar)
-                .child(UiBundle::new(Node::new()
+                .child(UiBundle::new(Node::row()
                     .width(Val::Percent(1.0))
-                    .height(Val::Percent(1.0)))
-                    .child(tab_pane(&editor, tile))
-                    .child(
-                        UiBundle::new(Node::new()
-                            .width(Val::Percent(1.0))
-                            .height(Val::Percent(1.0))
-                            .min_height(px(0.0)))
-                            .with(EditorContainer { tile_id: tile.id })
-                    ))
+                    .height(Val::Percent(1.0))
+                    .min_width(px(0.0))
+                    .min_height(px(0.0)))
+                    .with(TileArea)
+                    .child(tile_layout(editor, &editor.layout)))
                 .child(right_side_bar)
         ])
+        .child(drop_preview(editor))
         .children(resize_edges())
+}
+
+/// Builds the editor tiles as `layout` arranges them, each split sharing its space evenly.
+///
+/// # Parameters
+/// * editor: Editor whose tiles and theme are rendered.
+/// * layout: The part of the editor's layout to build.
+pub fn tile_layout(editor: &DeltosEditor, layout: &TileLayout) -> UiBundle {
+    match layout {
+        TileLayout::Tile(id) => match editor.tiles.get(id) {
+            Some(tile) => tile_node(editor, tile),
+            None => grow_node(Node::new()),
+        },
+        TileLayout::Split { axis, first, second } => {
+            // a thin line between the halves, along the split's cross axis
+            let (node, divider) = match axis {
+                SplitAxis::Horizontal => (Node::row(), Node::new().width(px(DIVIDER_SIZE)).height(Val::Percent(1.0))),
+                SplitAxis::Vertical => (Node::column(), Node::new().width(Val::Percent(1.0)).height(px(DIVIDER_SIZE))),
+            };
+            grow_node(node)
+                .child(tile_layout(editor, first))
+                .child(UiBundle::new(divider
+                    .shrink(0.0)
+                    .background(editor.theme.bg_3)))
+                .child(tile_layout(editor, second))
+        }
+    }
+}
+
+/// Wraps a node so it takes an even share of its parent and can shrink below its content.
+fn grow_node(node: Node) -> UiBundle {
+    UiBundle::new(node
+        .grow(1.0)
+        .shrink(1.0)
+        .basis(px(0.0))
+        .min_width(px(0.0))
+        .min_height(px(0.0)))
+}
+
+/// Builds one tile: its tab bar above the container its shown editor goes in.
+fn tile_node(editor: &DeltosEditor, tile: &EditorTile) -> UiBundle {
+    grow_node(Node::column())
+        .with(TileNode { tile_id: tile.id })
+        .child(tab_pane(editor, tile))
+        .child(
+            UiBundle::new(Node::new()
+                .width(Val::Percent(1.0))
+                .grow(1.0)
+                .basis(px(0.0))
+                .min_height(px(0.0)))
+                .with(EditorContainer { tile_id: tile.id })
+        )
+}
+
+/// Builds the hidden highlight shown over where a dragged tab will land.
+fn drop_preview(editor: &DeltosEditor) -> UiBundle {
+    let mut color = editor.theme.blue;
+    color.w = 0.25;
+    UiBundle::new(Node::new()
+        .fixed(Rect::new_top_left(px(0.0), px(0.0)))
+        .width(px(0.0))
+        .height(px(0.0))
+        .z_index(900)
+        .display(Display::None)
+        .background(color))
+        .with(DropPreview)
 }
 
 fn tab_pane(editor: &DeltosEditor, tile: &EditorTile) -> UiBundle {
     UiBundle::new(Node::row()
         .width(Val::Percent(1.0))
-        .height(px(40.0))
+        .height(px(TAB_BAR_HEIGHT))
         .background(editor.theme.bg_1)
         .align(AlignItems::Center)
         .shrink(0.0))
