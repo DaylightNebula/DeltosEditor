@@ -36,8 +36,8 @@ impl SideBarElement for FileSelectorSideBar {
         sources.sort_by_key(|(_, source)| source.name());
 
         UiBundle::new(Node::column()
-            .min_width(Val::Percent(0.25))
-            .max_width(Val::Percent(0.25))
+            .min_width(Val::Percent(1.0))
+            .max_width(Val::Percent(1.0))
             .height(Val::Percent(1.0))
             .gap(px(SOURCE_GAP))
             .overflow_y(Overflow::Scroll))

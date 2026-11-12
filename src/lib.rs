@@ -7,6 +7,7 @@ use gearbox::egui::egui::ahash::AHashMap;
 use gearbox::{App, GearboxRenderPlugin, Plugin};
 use gearbox::ui::*;
 use uuid::{Uuid, uuid};
+use winit::dpi::LogicalSize;
 
 use crate::editors::FileEditor;
 use crate::hover::HoverPlugin;
@@ -88,6 +89,9 @@ impl Plugin for DeltosPlugin {
             .add_plugin(HoverPlugin)
             .add_plugin(FileSelectorPlugin)
             .add_resource(editor)
+            .with_window_attributes(|attribs| {
+                attribs.with_inner_size(LogicalSize::new(1600, 850))
+            })
             .on_startup(|mut editor: ResMut<DeltosEditor>| {
                 editor.add_top_bar(Box::new(TitleDecorElement));
                 editor.add_top_bar(Box::new(TopWindowDecorElement));
