@@ -13,7 +13,7 @@ use crate::editors::FileEditor;
 use crate::hover::HoverPlugin;
 use crate::side_bar::SideBarElement;
 use crate::side_bar::file_selector::FileSelectorPlugin;
-use crate::sources::Source;
+use crate::sources::{Source, SourceTasks, TaskResult, replace_placeholder};
 use crate::theme::Theme;
 use crate::top_bar::TopBarElement;
 use crate::top_bar::title_decor::TitleDecorElement;
@@ -91,6 +91,7 @@ impl Plugin for DeltosPlugin {
             .add_plugin(HoverPlugin)
             .add_plugin(FileSelectorPlugin)
             .add_resource(editor)
+            .on_render_update(apply_finished_tasks)
             .with_window_attributes(|attribs| {
                 attribs.with_inner_size(LogicalSize::new(1600, 850))
             })
@@ -116,13 +117,14 @@ impl Plugin for DeltosPlugin {
 /// * focused_tile: ID of the tile new tabs open in, the last one a tab was focused or dropped in.
 /// * file_type_editor_lookup: ID of the `FileEditor` used for each file extension.
 /// * default_editor: ID of the `FileEditor` used for files no other editor handles.
+/// * tasks: Background work, like `Source` calls, whose results are applied to the world.
 #[derive(Resource, Debug)]
 pub struct DeltosEditor {
     pub title: String,
     pub font: Arc<SDFFont>,
     pub theme: Theme,
 
-    pub sources: AHashMap<Uuid, Box<dyn Source>>,
+    pub sources: AHashMap<Uuid, Arc<dyn Source>>,
     pub top_bars: AHashMap<Uuid, Box<dyn TopBarElement>>,
     pub side_bars: AHashMap<Uuid, Box<dyn SideBarElement>>,
     pub editors: AHashMap<Uuid, Box<dyn FileEditor>>,
@@ -131,7 +133,18 @@ pub struct DeltosEditor {
     pub layout: TileLayout,
     pub focused_tile: Uuid,
     pub file_type_editor_lookup: AHashMap<String, Uuid>,
-    pub default_editor: Option<Uuid>
+    pub default_editor: Option<Uuid>,
+    pub tasks: SourceTasks
+}
+
+/// Applies the results of every finished background task, see `SourceTasks`.
+///
+/// Takes the `DeltosEditor` mutably so it never runs alongside a system that is building UI
+/// a task's result replaces.
+fn apply_finished_tasks(world: World, mut editor: ResMut<DeltosEditor>) {
+    for apply in editor.tasks.finished() {
+        apply(&world, &mut editor);
+    }
 }
 
 /// A container of tabs that can be built into one tile.
@@ -190,7 +203,8 @@ impl DeltosEditor {
             top_bars: AHashMap::default(),
             side_bars: AHashMap::default(),
             file_type_editor_lookup: AHashMap::default(),
-            default_editor: None
+            default_editor: None,
+            tasks: SourceTasks::default()
         }
     }
 
@@ -209,7 +223,7 @@ impl DeltosEditor {
 
     /// Add a source to this `DeltosEditor`.
     pub fn add_source(&mut self, source: Box<dyn Source>) {
-        self.sources.insert(source.id(), source);
+        self.sources.insert(source.id(), Arc::from(source));
     }
 
     /// Add a top bar to this `DeltosEditor`.
@@ -451,7 +465,8 @@ impl DeltosEditor {
         world.spawn_with_parent(Some(entity_id), bundle.into_entity_builder());
     }
 
-    /// Builds the editor of the tab shown in a tile, tagged with the tab it belongs to.
+    /// Builds a placeholder for the editor of the tab shown in a tile, tagged with the tab it
+    /// belongs to, and builds the editor in the background to replace it.
     fn build_tab_editor(&mut self, tile_id: Uuid) -> Option<UiBundle> {
         let tile = self.tiles.get(&tile_id)?;
         let tab = tile.tabs.get(&tile.editor_tab?)?;
@@ -460,9 +475,25 @@ impl DeltosEditor {
             .and_then(|ext| self.file_type_editor_lookup.get(&ext))
             .or(self.default_editor.as_ref())?;
         let editor = self.editors.get_mut(editor_id)?;
-        let source = self.sources.get(&tab.source)?;
-        let bundle = editor.build_editor(&self.theme, source.as_ref(), tab.path.clone());
-        Some(bundle.with(EditorContent { tab_id: tab.id }))
+        let source = self.sources.get(&tab.source)?.clone();
+        let build = editor.build_editor(&self.theme, source, tab.path.clone());
+
+        // swap the built editor in for the placeholder once it is ready
+        let (tab_id, placeholder) = (tab.id, reserve_id());
+        self.tasks.spawn(Box::pin(async move {
+            let bundle = build.await.with(EditorContent { tab_id });
+            let apply: TaskResult = Box::new(move |world: &World, _: &mut DeltosEditor| {
+                replace_placeholder(world, placeholder, [bundle]);
+            });
+            apply
+        }));
+
+        // the placeholder carries the tab too, so it moves between tiles like a built editor
+        let loading = UiBundle::new(Node::new().padding(Rect::single(px(12.0))))
+            .with_id(placeholder)
+            .with(EditorContent { tab_id })
+            .text(Text::new(self.font.clone(), "Loading...", self.theme.bg_5, 14.0));
+        Some(loading)
     }
 
     /// Rebuilds the whole editor area from `layout`, after tiles were added, removed or moved.

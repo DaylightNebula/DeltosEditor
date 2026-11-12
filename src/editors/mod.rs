@@ -1,9 +1,9 @@
-use std::{fmt::Debug, path::PathBuf};
+use std::{fmt::Debug, path::PathBuf, sync::Arc};
 
 use gearbox::ui::UiBundle;
 use uuid::Uuid;
 
-use crate::{EDITOR_UUID_NAMESPACE, sources::Source, theme::Theme};
+use crate::{EDITOR_UUID_NAMESPACE, sources::{BoxFuture, Source}, theme::Theme};
 
 pub mod text;
 
@@ -19,5 +19,8 @@ pub trait FileEditor: Debug + Send {
     fn file_types(&self) -> Vec<String>;
 
     /// Supplier of a future to a bundle that represents the editor of a file.
-    fn build_editor(&mut self, theme: &Theme, source: &dyn Source, path: PathBuf) -> UiBundle;
+    ///
+    /// The future runs in the background, so it can load the file from `source`.  The
+    /// `DeltosEditor` shows a placeholder until it finishes.
+    fn build_editor(&mut self, theme: &Theme, source: Arc<dyn Source>, path: PathBuf) -> BoxFuture<'static, UiBundle>;
 }

@@ -4,7 +4,7 @@ use anarchy::*;
 use gearbox::{App, Plugin, ui::*};
 use winit::keyboard::Key;
 
-use crate::{DeltosEditor, editors::FileEditor, sources::Source, theme::Theme};
+use crate::{DeltosEditor, editors::FileEditor, sources::{BoxFuture, Source, TaskResult}, theme::Theme};
 use uuid::Uuid;
 
 /// Marks the node holding an open file's text.
@@ -49,13 +49,15 @@ impl FileEditor for SimpleTextDeltosEditor {
         ["txt", "md", "toml", "json"].map(String::from).to_vec()
     }
 
-    fn build_editor(&mut self, theme: &Theme, source: &dyn Source, path: PathBuf) -> UiBundle {
-        let font = self.font.clone();
-        match source.read_file_text(path.clone()) {
-            Ok(text) => text_area(theme, font, text, source.id(), path),
-            Err(err) => UiBundle::new(Node::new().padding(Rect::single(px(12.0))))
-                .text(Text::new(font, &format!("Couldn't open {}: {err:#}", path.display()), theme.red, 14.0)),
-        }
+    fn build_editor(&mut self, theme: &Theme, source: Arc<dyn Source>, path: PathBuf) -> BoxFuture<'static, UiBundle> {
+        let (theme, font) = (*theme, self.font.clone());
+        Box::pin(async move {
+            match source.read_file_text(path.clone()).await {
+                Ok(text) => text_area(&theme, font, text, source.id(), path),
+                Err(err) => UiBundle::new(Node::new().padding(Rect::single(px(12.0))))
+                    .text(Text::new(font, &format!("Couldn't open {}: {err:#}", path.display()), theme.red, 14.0)),
+            }
+        })
     }
 }
 
@@ -85,21 +87,42 @@ fn mark_dirty(world: World, changed: Event<ValueChange<String>>) {
     }
 }
 
-/// Writes every dirty file back to its source when save is pressed.
-fn save_files(editor: Res<DeltosEditor>, input: Res<UiInput>, mut files: Query<(&'static mut OpenFile, &'static TextInput)>) {
+/// Writes every dirty file back to its source in the background when save is pressed.
+fn save_files(editor: Res<DeltosEditor>, input: Res<UiInput>, mut files: Query<(&'static OpenFile, &'static TextInput)>) {
     let command = if cfg!(target_os = "macos") { input.modifiers.super_key() } else { input.modifiers.control_key() };
     let pressed_s = input.keys.iter().any(|(key, _)| matches!(key, Key::Character(c) if c.eq_ignore_ascii_case("s")));
     if !(command && pressed_s) { return }
 
-    while let Ok(Some((_, (mut file, field)))) = files.next() {
+    while let Ok(Some((entity, (file, field)))) = files.next() {
         if !file.dirty { continue }
-        let Some(source) = editor.sources.get(&file.source) else {
+        let Some(source) = editor.sources.get(&file.source).cloned() else {
             log::error!("Couldn't save {}: unknown source {}", file.path.display(), file.source);
             continue;
         };
-        match source.write_file_text(file.path.clone(), field.text.clone()) {
-            Ok(()) => file.dirty = false,
-            Err(err) => log::error!("{err:#}"),
-        }
+
+        // write the text, then mark the file saved if it wasn't edited while writing
+        let (path, text) = (file.path.clone(), field.text.clone());
+        editor.tasks.spawn(Box::pin(async move {
+            let result = source.write_file_text(path, text.clone()).await;
+            let apply: TaskResult = Box::new(move |world: &World, _: &mut DeltosEditor| match result {
+                Ok(()) => mark_saved(world, entity, &text),
+                Err(err) => log::error!("{err:#}"),
+            });
+            apply
+        }));
+    }
+}
+
+/// Clears a file's dirty flag once `saved` is written, unless its text changed since.
+fn mark_saved(world: &World, entity: EntityID, saved: &str) {
+    let unchanged = world.handle(entity)
+        .get::<&TextInput>()
+        .ok()
+        .flatten()
+        .is_some_and(|field| field.text == saved);
+    if !unchanged { return }
+
+    if let Ok(Some(mut file)) = world.handle(entity).get::<&mut OpenFile>() {
+        file.dirty = false;
     }
 }

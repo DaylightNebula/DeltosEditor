@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use anarchy::{Event, Res, ResMut, SystemPin, World, pin};
-use gearbox::{App, Plugin, ui::*};
+use gearbox::{App, Plugin, anyhow, ui::*};
 use uuid::Uuid;
 
-use crate::{DeltosEditor, hover::HoverStyle, side_bar::{SideBarElement, SideBarPlugin, SideBarSlot}, window::{FileItem, FolderItem}};
+use crate::{DeltosEditor, hover::HoverStyle, side_bar::{SideBarElement, SideBarPlugin, SideBarSlot}, sources::{FileList, TaskResult, replace_placeholder}, window::{FileItem, FolderItem}};
 
 pub const FOLDER_CLOSED: &str = "\u{ea83}";
 pub const FOLDER_OPEN: &str = "\u{eaf7}";
@@ -57,22 +57,47 @@ fn source_list(editor: &DeltosEditor, source: Uuid, name: &str) -> UiBundle {
             .padding(Rect::new(px(8.0), px(6.0), px(12.0), px(12.0))))
             .text(Text::new(editor.font.clone(), name.to_uppercase(), editor.theme.bg_5, 12.0)
                 .with_align(Align::Start, Align::Center)))
-        .children(folder_contents(editor, source, Path::new("."), 0))
+        .child(folder_contents(editor, source, Path::new("."), 0))
 }
 
-fn folder_contents(editor: &DeltosEditor, source: Uuid, path: &Path, depth: usize) -> Vec<UiBundle> {
-    let error_row = |message: String| vec![row(depth).text(Text::new(editor.font.clone(), message, editor.theme.red, 12.0))];
+/// Builds a placeholder row for a folder's contents, and lists the folder from its source in
+/// the background to replace the placeholder with the folder's items.
+fn folder_contents(editor: &DeltosEditor, source: Uuid, path: &Path, depth: usize) -> UiBundle {
+    let Some(file_source) = editor.sources.get(&source).cloned() else {
+        return error_row(editor, depth, format!("Unknown source {source}"));
+    };
 
-    // list the folder from its source
-    let Some(file_source) = editor.sources.get(&source) else { return error_row(format!("Unknown source {source}")) };
-    let list = match file_source.list_files(path.to_path_buf()) {
+    // list the folder, then swap its items in for the placeholder
+    let (path, placeholder) = (path.to_path_buf(), reserve_id());
+    editor.tasks.spawn(Box::pin(async move {
+        let list = file_source.list_files(path).await;
+        let apply: TaskResult = Box::new(move |world: &World, editor: &mut DeltosEditor| {
+            replace_placeholder(world, placeholder, folder_items(editor, source, list, depth));
+        });
+        apply
+    }));
+
+    row(depth)
+        .with_id(placeholder)
+        .text(Text::new(editor.font.clone(), "Loading...", editor.theme.bg_5, 12.0)
+            .with_align(Align::Start, Align::Center))
+}
+
+/// Builds the rows of a listed folder, or an error row if it couldn't be listed.
+fn folder_items(editor: &DeltosEditor, source: Uuid, list: anyhow::Result<FileList>, depth: usize) -> Vec<UiBundle> {
+    let list = match list {
         Ok(list) => list,
-        Err(err) => return error_row(format!("{err:#}")),
+        Err(err) => return vec![error_row(editor, depth, format!("{err:#}"))],
     };
 
     let folders = list.folders.iter().map(|name| folder_item(editor, source, name.clone(), depth));
     let files = list.files.iter().map(|file| file_item(editor, source, file, depth));
     folders.chain(files).collect()
+}
+
+/// Builds a row showing an error in red.
+fn error_row(editor: &DeltosEditor, depth: usize, message: String) -> UiBundle {
+    row(depth).text(Text::new(editor.font.clone(), message, editor.theme.red, 12.0))
 }
 
 fn folder_item(editor: &DeltosEditor, source: Uuid, path: PathBuf, depth: usize) -> UiBundle {
@@ -133,9 +158,7 @@ pub fn open_folders(world: World, editor: Res<DeltosEditor>, toggled: Event<Valu
         }
 
         if load {
-            for item in folder_contents(&editor, source, &path, depth + 1) {
-                world.spawn_with_parent(Some(content), item.into_entity_builder());
-            }
+            world.spawn_with_parent(Some(content), folder_contents(&editor, source, &path, depth + 1).into_entity_builder());
         }
     }
 }
