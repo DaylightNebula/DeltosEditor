@@ -4,7 +4,7 @@ use anarchy::{Event, Res, ResMut, SystemPin, World, pin};
 use gearbox::{App, Plugin, ui::*};
 use uuid::Uuid;
 
-use crate::{DeltosEditor, hover::HoverStyle, side_bar::{SideBarElement, SideBarSlot}, window::{FileItem, FolderItem}};
+use crate::{DeltosEditor, hover::HoverStyle, side_bar::{SideBarElement, SideBarPlugin, SideBarSlot}, window::{FileItem, FolderItem}};
 
 pub const FOLDER_CLOSED: &str = "\u{ea83}";
 pub const FOLDER_OPEN: &str = "\u{eaf7}";
@@ -16,7 +16,8 @@ pub const INDENT: f32 = 14.0;
 pub struct FileSelectorPlugin;
 impl Plugin for FileSelectorPlugin {
     fn build(self, app: App) -> App {
-        app .on_startup_with(|mut editor: ResMut<DeltosEditor>| {
+        app .add_plugin(SideBarPlugin)
+            .on_startup_with(|mut editor: ResMut<DeltosEditor>| {
                 editor.add_side_bar(Box::new(FileSelectorSideBar));
             }, pin(SystemPin::Start))
             .on_render_update(open_folders)
