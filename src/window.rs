@@ -8,18 +8,13 @@ use winit::window::{CursorIcon, ResizeDirection};
 #[cfg(windows)]
 use winit::platform::windows::WindowAttributesExtWindows;
 
-use crate::{DeltosEditor, TAB_UUID_NAMESPACE, editors::text::OpenFile, render::{self, *}};
+use crate::{DeltosEditor, TAB_UUID_NAMESPACE, editors::text::OpenFile, render::self};
 
 pub const MENU_HOVER: Vec4 = Vec4::new(0.09, 0.09, 0.09, 1.0);
 pub const TAB_SCROLL_PER_NOTCH: f32 = 48.0;
 pub const GRIP: f32 = 5.0;
-pub const FOLDER_CLOSED: &str = "\u{ea83}";
-pub const FOLDER_OPEN: &str = "\u{eaf7}";
-pub const FILE_ICON: &str = "\u{eb60}";
 pub const DIRTY_ICON: &str = "\u{ea71}";
 pub const CLOSE_ICON: &str = "\u{ea76}";
-pub const INDENT: f32 = 14.0;
-pub const SOURCE_GAP: f32 = 16.0;
 
 pub struct WindowPlugin;
 impl Plugin for WindowPlugin {
@@ -38,7 +33,6 @@ impl Plugin for WindowPlugin {
             .on_render_update(drag_window)
             .on_render_update(scroll_tabs)
             .on_render_update(resize_window)
-            .on_render_update(open_folders)
             .on_render_update(click_files)
             .on_render_update(click_tabs)
             .on_render_update(show_dirty_tabs)
@@ -154,36 +148,6 @@ fn scroll_tabs(input: Res<UiInput>, mut strips: Query<(&'static TabStrip, &'stat
         let current = *node.style().scroll();
         let x = (current.x - input.wheel * TAB_SCROLL_PER_NOTCH).clamp(0.0, scroll.max.x / scale);
         if x != current.x { node.style_mut().set_scroll(Vec2::new(x, current.y)); }
-    }
-}
-
-/// Lists a folder's contents the first time it opens, and swaps its header's icons as it opens
-/// and closes. gearbox's `Collapsible` already shows and hides the contents.
-fn open_folders(world: World, editor: Res<DeltosEditor>, toggled: Event<ValueChange<bool>>) {
-    for ValueChange { entity, value: open } in toggled.read() {
-        let Ok(Some(mut folder)) = world.handle(entity).get::<&mut FolderItem>() else { continue };
-        let load = open && !folder.loaded;
-        folder.loaded |= open;
-        let (source, path, depth) = (folder.source, folder.path.clone(), folder.depth);
-
-        // release the component before spawning into the world
-        drop(folder);
-
-        let children = world.hierarchy().children(entity).map(|children| children.to_vec()).unwrap_or_default();
-        let [header, content, ..] = children[..] else { continue };
-
-        if let Ok(Some(mut node)) = world.handle(header).get::<&mut Node>()
-            && let Some(text) = node.style_mut().text_mut()
-        {
-            let (from, to) = if open { (FOLDER_CLOSED, FOLDER_OPEN) } else { (FOLDER_OPEN, FOLDER_CLOSED) };
-            text.content = text.content.replacen(from, to, 1);
-        }
-
-        if load {
-            for item in folder_contents(&editor, source, &path, depth + 1) {
-                world.spawn_with_parent(Some(content), item.into_entity_builder());
-            }
-        }
     }
 }
 

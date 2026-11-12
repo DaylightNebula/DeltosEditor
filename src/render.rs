@@ -1,14 +1,12 @@
-use std::path::{Path, PathBuf};
-
 use anarchy::World;
 use gearbox::{glam::*, ui::*};
 use winit::window::ResizeDirection;
 
-use crate::{DeltosEditor, EditorTab, EditorTile, hover::HoverStyle, top_bar, window::*};
-use uuid::Uuid;
+use crate::{DeltosEditor, EditorTab, EditorTile, hover::HoverStyle, side_bar, top_bar, window::*};
 
 pub fn render(world: &World, editor: &DeltosEditor) -> UiBundle {
     let tile = editor.tiles.values().next().unwrap();
+    let (left_side_bar, right_side_bar) = side_bar::render_left_right(world, editor);
 
     UiBundle::new(
             Node::column()
@@ -26,7 +24,7 @@ pub fn render(world: &World, editor: &DeltosEditor) -> UiBundle {
             UiBundle::new(Node::row()
                 .grow(1.0)
                 .min_height(px(0.0)))
-                .child(file_selector(&editor))
+                .child(left_side_bar)
                 .child(UiBundle::new(Node::new()
                     .width(Val::Percent(1.0))
                     .height(Val::Percent(1.0)))
@@ -38,88 +36,9 @@ pub fn render(world: &World, editor: &DeltosEditor) -> UiBundle {
                             .min_height(px(0.0)))
                             .with(EditorContainer { tile_id: tile.id })
                     ))
+                .child(right_side_bar)
         ])
         .children(resize_edges())
-}
-
-/// Builds the file list: one list per source, stacked in a single column.
-fn file_selector(editor: &DeltosEditor) -> UiBundle {
-    // order sources by name so the lists keep a stable order between launches
-    let mut sources: Vec<_> = editor.sources.iter().collect();
-    sources.sort_by_key(|(_, source)| source.name());
-
-    UiBundle::new(Node::column()
-        .min_width(Val::Percent(0.25))
-        .max_width(Val::Percent(0.25))
-        .height(Val::Percent(1.0))
-        .gap(px(SOURCE_GAP))
-        .overflow_y(Overflow::Scroll))
-        .children(sources
-            .into_iter()
-            .map(|(id, source)| source_list(editor, *id, &source.name()))
-            .collect::<Vec<_>>())
-}
-
-/// Builds one source's list: a header with the source's name above its root folder contents.
-fn source_list(editor: &DeltosEditor, source: Uuid, name: &str) -> UiBundle {
-    UiBundle::new(Node::column().shrink(0.0))
-        .child(UiBundle::new(Node::new()
-            .shrink(0.0)
-            .padding(Rect::new(px(8.0), px(6.0), px(12.0), px(12.0))))
-            .text(Text::new(editor.font.clone(), name.to_uppercase(), editor.theme.bg_5, 12.0)
-                .with_align(Align::Start, Align::Center)))
-        .children(folder_contents(editor, source, Path::new("."), 0))
-}
-
-/// Builds the file tree rows for the contents of `path` in the source `source`.
-pub(crate) fn folder_contents(editor: &DeltosEditor, source: Uuid, path: &Path, depth: usize) -> Vec<UiBundle> {
-    let error_row = |message: String| vec![row(depth).text(Text::new(editor.font.clone(), message, editor.theme.red, 12.0))];
-
-    // list the folder from its source
-    let Some(file_source) = editor.sources.get(&source) else { return error_row(format!("Unknown source {source}")) };
-    let list = match file_source.list_files(path.to_path_buf()) {
-        Ok(list) => list,
-        Err(err) => return error_row(format!("{err:#}")),
-    };
-
-    let folders = list.folders.iter().map(|name| folder_item(editor, source, name.clone(), depth));
-    let files = list.files.iter().map(|file| file_item(editor, source, file, depth));
-    folders.chain(files).collect()
-}
-
-fn folder_item(editor: &DeltosEditor, source: Uuid, path: PathBuf, depth: usize) -> UiBundle {
-    let name = path.file_name()
-        .map(|a| a.to_string_lossy().to_string())
-        .unwrap_or_else(|| String::new());
-
-    UiBundle::new(Node::column().shrink(0.0))
-        .with(Collapsible { open: false })
-        .with(FolderItem { source, path, depth, loaded: false })
-        .child(row(depth)
-            .text(Text::new(editor.font.clone(), format!("{FOLDER_CLOSED} {name}"), editor.theme.bg_8, 14.0)
-                .with_align(Align::Start, Align::Center))
-            .interactive()
-            .with(HoverStyle::new(editor.theme.bg_4)))
-        .child(UiBundle::new(Node::column().shrink(0.0)))
-}
-
-fn file_item(editor: &DeltosEditor, source: Uuid, file: &PathBuf, depth: usize) -> UiBundle {
-    let name = file.file_name()
-        .map(|a| a.to_string_lossy().to_string())
-        .unwrap_or_else(|| String::new());
-
-    row(depth)
-        .text(Text::new(editor.font.clone(), format!("{FILE_ICON} {name}"), editor.theme.bg_8, 14.0)
-            .with_align(Align::Start, Align::Center))
-        .interactive()
-        .with(FileItem { source, path: file.clone() })
-        .with(HoverStyle::new(editor.theme.bg_4))
-}
-
-fn row(depth: usize) -> UiBundle {
-    UiBundle::new(Node::new()
-        .shrink(0.0)
-        .padding(Rect::new(px(6.0), px(6.0), px(16.0 + depth as f32 * INDENT), px(0.0))))
 }
 
 fn tab_pane(editor: &DeltosEditor, tile: &EditorTile) -> UiBundle {
