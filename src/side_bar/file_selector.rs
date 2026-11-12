@@ -12,6 +12,7 @@ pub const FILE_ICON: &str = "\u{eb60}";
 pub const SOURCE_GAP: f32 = 16.0;
 pub const INDENT: f32 = 14.0;
 
+/// Adds the `FileSelectorSideBar` `SideBarElement` and its supporting systems.
 pub struct FileSelectorPlugin;
 impl Plugin for FileSelectorPlugin {
     fn build(self, app: App) -> App {
@@ -22,6 +23,7 @@ impl Plugin for FileSelectorPlugin {
     }
 }
 
+/// Adds a file selector to the left side bar of the `DeltosEditor`.
 #[derive(Debug)]
 pub struct FileSelectorSideBar;
 impl SideBarElement for FileSelectorSideBar {
