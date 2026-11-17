@@ -1,5 +1,5 @@
 use std::fmt::{Debug, Formatter};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anarchy::*;
@@ -11,8 +11,9 @@ use winit::dpi::LogicalSize;
 
 use crate::editors::FileEditor;
 use crate::hover::HoverPlugin;
-use crate::side_bar::SideBarElement;
-use crate::side_bar::file_selector::FileSelectorPlugin;
+use crate::notify::{Notification, NotifyLevel, NotifyPlugin};
+use crate::side_bar::{SideBarElement, SideBarSlot};
+use crate::side_bar::file_selector::{FileSelectorPlugin, FileSelectorSideBar};
 use crate::sources::{Source, SourceTasks, TaskResult, replace_placeholder};
 use crate::theme::Theme;
 use crate::top_bar::TopBarElement;
@@ -29,6 +30,7 @@ pub const TAB_UUID_NAMESPACE: Uuid = uuid!("fefe4e8b-7e6b-4e1b-a728-249b6b052d71
 
 pub mod editors;
 pub mod hover;
+pub mod notify;
 pub mod render;
 pub mod side_bar;
 pub mod sources;
@@ -90,6 +92,7 @@ impl Plugin for DeltosPlugin {
             .add_plugin(WindowPlugin)
             .add_plugin(HoverPlugin)
             .add_plugin(FileSelectorPlugin)
+            .add_plugin(NotifyPlugin)
             .add_resource(editor)
             .on_render_update(apply_finished_tasks)
             .with_window_attributes(|attribs| {
@@ -118,6 +121,11 @@ impl Plugin for DeltosPlugin {
 /// * file_type_editor_lookup: ID of the `FileEditor` used for each file extension.
 /// * default_editor: ID of the `FileEditor` used for files no other editor handles.
 /// * tasks: Background work, like `Source` calls, whose results are applied to the world.
+/// * notifications: Messages passed to `notify` that aren't shown as toasts yet.
+/// * side_bar_rebuilds: Side bars whose shown element is rebuilt on the next frame, see
+///   `request_rebuild`.
+/// * tiles_dirty: Whether the editor area is rebuilt on the next frame, after tabs were closed
+///   without access to the world (see `remove_source`).
 #[derive(Resource, Debug)]
 pub struct DeltosEditor {
     pub title: String,
@@ -134,16 +142,47 @@ pub struct DeltosEditor {
     pub focused_tile: Uuid,
     pub file_type_editor_lookup: AHashMap<String, Uuid>,
     pub default_editor: Option<Uuid>,
-    pub tasks: SourceTasks
+    pub tasks: SourceTasks,
+
+    pub(crate) notifications: Vec<Notification>,
+    pub(crate) side_bar_rebuilds: Vec<SideBarSlot>,
+    pub(crate) tiles_dirty: bool
 }
 
-/// Applies the results of every finished background task, see `SourceTasks`.
+/// The ID of the tab showing a file, unique per source and path, so equal paths in different
+/// sources (like two modules' `Cargo.toml`) open in their own tabs.
+///
+/// # Parameters
+/// * source: ID of the `Source` the file belongs to.
+/// * path: Path of the file inside its source.
+pub fn tab_id(source: Uuid, path: &Path) -> Uuid {
+    let mut name = source.as_bytes().to_vec();
+    name.extend_from_slice(path.as_os_str().as_encoded_bytes());
+    Uuid::new_v5(&TAB_UUID_NAMESPACE, &name)
+}
+
+/// Applies the results of every finished background task, see `SourceTasks`, then the UI
+/// rebuilds they or other systems requested.
 ///
 /// Takes the `DeltosEditor` mutably so it never runs alongside a system that is building UI
 /// a task's result replaces.
 fn apply_finished_tasks(world: World, mut editor: ResMut<DeltosEditor>) {
     for apply in editor.tasks.finished() {
         apply(&world, &mut editor);
+    }
+
+    // rebuild the editor area once tabs were closed, like by removing a source
+    if editor.tiles_dirty {
+        editor.tiles_dirty = false;
+        editor.rebuild_tiles(&world);
+    }
+
+    // rebuild each requested side bar once, however often it was requested
+    let mut slots = std::mem::take(&mut editor.side_bar_rebuilds);
+    slots.sort();
+    slots.dedup();
+    for slot in slots {
+        side_bar::rebuild_slot(&world, &editor, slot);
     }
 }
 
@@ -204,7 +243,10 @@ impl DeltosEditor {
             side_bars: AHashMap::default(),
             file_type_editor_lookup: AHashMap::default(),
             default_editor: None,
-            tasks: SourceTasks::default()
+            tasks: SourceTasks::default(),
+            notifications: Vec::new(),
+            side_bar_rebuilds: Vec::new(),
+            tiles_dirty: false
         }
     }
 
@@ -221,9 +263,77 @@ impl DeltosEditor {
         self.editors.insert(editor.id(), editor);
     }
 
-    /// Add a source to this `DeltosEditor`.
+    /// Adds a source to this `DeltosEditor`, replacing any source with the same ID.
+    ///
+    /// Can be called at any time: once the UI is built, the file tree is rebuilt on the next
+    /// frame to show the new source.
+    ///
+    /// # Parameters
+    /// * source: The source to add.
     pub fn add_source(&mut self, source: Box<dyn Source>) {
         self.sources.insert(source.id(), Arc::from(source));
+        self.request_rebuild(FileSelectorSideBar.default_slot());
+    }
+
+    /// Removes a source and closes every tab showing one of its files, discarding their
+    /// unsaved changes.
+    ///
+    /// The file tree and editor area are rebuilt on the next frame.  Returns the removed
+    /// source, or `None` if no source has that ID.
+    ///
+    /// # Parameters
+    /// * id: ID of the source to remove.
+    pub fn remove_source(&mut self, id: Uuid) -> Option<Arc<dyn Source>> {
+        let removed = self.sources.remove(&id)?;
+
+        // close the source's tabs, dropping tiles they leave empty
+        let tile_ids: Vec<Uuid> = self.layout.tiles();
+        for tile_id in tile_ids {
+            let Some(tile) = self.tiles.get_mut(&tile_id) else { continue };
+            let before = tile.tabs.len();
+            tile.tabs.retain(|_, tab| tab.source != id);
+            if tile.tabs.len() == before { continue }
+
+            if tile.editor_tab.is_some_and(|tab| !tile.tabs.contains_key(&tab)) {
+                tile.editor_tab = tile.tabs.keys().next().copied();
+            }
+            if tile.tabs.is_empty() {
+                self.remove_tile(tile_id);
+            }
+            self.tiles_dirty = true;
+        }
+
+        self.request_rebuild(FileSelectorSideBar.default_slot());
+        Some(removed)
+    }
+
+    /// Rebuilds the element shown in a side bar on the next frame, like the file tree after
+    /// the host changed what a source lists.
+    ///
+    /// Does nothing before the editor's UI is built, which builds every side bar anyway.
+    ///
+    /// # Parameters
+    /// * slot: The side bar to rebuild.
+    pub fn request_rebuild(&mut self, slot: SideBarSlot) {
+        self.side_bar_rebuilds.push(slot);
+    }
+
+    /// Shows a message to the user as a toast, and logs it at the matching level.
+    ///
+    /// Meant for failures the user should know about, like a source being unreachable, a
+    /// save being refused or a file that changed remotely.
+    ///
+    /// # Parameters
+    /// * level: How important the message is, which picks its color.
+    /// * message: Text of the message.
+    pub fn notify(&mut self, level: NotifyLevel, message: impl Into<String>) {
+        let message = message.into();
+        match level {
+            NotifyLevel::Info => log::info!("{message}"),
+            NotifyLevel::Warning => log::warn!("{message}"),
+            NotifyLevel::Error => log::error!("{message}"),
+        }
+        self.notifications.push(Notification { level, message });
     }
 
     /// Add a top bar to this `DeltosEditor`.
@@ -245,7 +355,7 @@ impl DeltosEditor {
     /// * source: ID of the `Source` to load the file from.
     /// * path: Path of the file inside `source`.
     pub fn open_tab(&mut self, world: &World, source: Uuid, path: &PathBuf) {
-        let file_id = Uuid::new_v5(&TAB_UUID_NAMESPACE, path.as_os_str().as_encoded_bytes());
+        let file_id = tab_id(source, path);
 
         let file_name = path.file_name()
             .and_then(|str| str.to_str())
@@ -476,7 +586,8 @@ impl DeltosEditor {
             .or(self.default_editor.as_ref())?;
         let editor = self.editors.get_mut(editor_id)?;
         let source = self.sources.get(&tab.source)?.clone();
-        let build = editor.build_editor(&self.theme, source, tab.path.clone());
+        let read_only = source.read_only();
+        let build = editor.build_editor(&self.theme, source, tab.path.clone(), read_only);
 
         // swap the built editor in for the placeholder once it is ready
         let (tab_id, placeholder) = (tab.id, reserve_id());
@@ -550,6 +661,7 @@ impl DeltosEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sources::memory::MemorySource;
 
     /// Builds an editor with the bundled font and no sources or editors.
     fn editor() -> DeltosEditor {
@@ -657,5 +769,73 @@ mod tests {
         assert!(editor.remove_tile(second));
         assert_eq!(editor.focused_tile, first);
         assert!(!editor.remove_tile(first), "the last tile was removed");
+    }
+
+    /// Every tab ID open in any tile.
+    fn open_tabs(editor: &DeltosEditor) -> Vec<Uuid> {
+        editor.tiles
+            .values()
+            .flat_map(|tile| tile.tabs.keys().copied())
+            .collect()
+    }
+
+    #[test]
+    fn equal_paths_in_different_sources_get_their_own_tabs() {
+        let mut editor = editor();
+        let world = World::default();
+        let (main, foo) = (MemorySource::new("main"), MemorySource::new("foo"));
+        let path = PathBuf::from("./Cargo.toml");
+        editor.add_source(Box::new(main.clone()));
+        editor.add_source(Box::new(foo.clone()));
+
+        editor.open_tab(&world, main.id(), &path);
+        editor.open_tab(&world, foo.id(), &path);
+        editor.open_tab(&world, main.id(), &path);
+
+        let mut tabs = open_tabs(&editor);
+        tabs.sort();
+        let mut expected = vec![tab_id(main.id(), &path), tab_id(foo.id(), &path)];
+        expected.sort();
+        assert_eq!(tabs, expected, "reopening a file focuses its tab instead of adding one");
+        assert_ne!(tab_id(main.id(), &path), tab_id(foo.id(), &path));
+    }
+
+    #[test]
+    fn roots_sort_by_order_then_name() {
+        let mut editor = editor();
+        editor.add_source(Box::new(MemorySource::new("gearbox").with_order(2).with_read_only(true)));
+        editor.add_source(Box::new(MemorySource::new("zeta").with_order(1)));
+        editor.add_source(Box::new(MemorySource::new("alpha").with_order(1)));
+        editor.add_source(Box::new(MemorySource::new("main").with_order(0)));
+
+        let names: Vec<String> = side_bar::file_selector::sorted_sources(&editor)
+            .iter()
+            .map(|source| source.name())
+            .collect();
+
+        assert_eq!(names, ["main", "alpha", "zeta", "gearbox"]);
+    }
+
+    #[test]
+    fn removing_a_source_closes_its_tabs() {
+        let mut editor = editor();
+        let world = World::default();
+        let (main, foo) = (MemorySource::new("main"), MemorySource::new("foo"));
+        editor.add_source(Box::new(main.clone()));
+        editor.add_source(Box::new(foo.clone()));
+        let first = editor.focused_tile;
+        editor.open_tab(&world, main.id(), &PathBuf::from("a.txt"));
+        editor.open_tab(&world, foo.id(), &PathBuf::from("b.txt"));
+        let foo_tab = tab_id(foo.id(), Path::new("b.txt"));
+        editor.place_tab(first, foo_tab, first, DropZone::Right).expect("split made");
+        editor.tiles_dirty = false;
+
+        assert!(editor.remove_source(foo.id()).is_some());
+
+        assert!(!editor.sources.contains_key(&foo.id()));
+        assert_eq!(open_tabs(&editor), vec![tab_id(main.id(), Path::new("a.txt"))]);
+        assert_eq!(editor.layout, TileLayout::Tile(first), "the emptied tile is removed");
+        assert!(editor.tiles_dirty);
+        assert!(editor.remove_source(foo.id()).is_none());
     }
 }

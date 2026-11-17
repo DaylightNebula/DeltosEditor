@@ -33,7 +33,7 @@ impl Source for LocalFileSource {
 
             // folders.sort();
             // files.sort_by(|a, b| (&a., &a.extension).cmp(&(&b.name, &b.extension)));
-            Ok(FileList { folders, files })
+            Ok(FileList::new(folders, files))
         })
     }
 
@@ -56,6 +56,24 @@ impl Source for LocalFileSource {
     fn write_file_bytes(&self, path: PathBuf, content: Vec<u8>) -> SourceFuture<'_, ()> {
         Box::pin(async move {
             std::fs::write(&path, content).with_context(|| format!("Couldn't write {}", path.display()))
+        })
+    }
+
+    fn delete_file(&self, path: PathBuf) -> SourceFuture<'_, ()> {
+        Box::pin(async move {
+            std::fs::remove_file(&path).with_context(|| format!("Couldn't delete {}", path.display()))
+        })
+    }
+
+    fn rename_file(&self, from: PathBuf, to: PathBuf) -> SourceFuture<'_, ()> {
+        Box::pin(async move {
+            std::fs::rename(&from, &to).with_context(|| format!("Couldn't move {} to {}", from.display(), to.display()))
+        })
+    }
+
+    fn create_folder(&self, path: PathBuf) -> SourceFuture<'_, ()> {
+        Box::pin(async move {
+            std::fs::create_dir_all(&path).with_context(|| format!("Couldn't create {}", path.display()))
         })
     }
 }

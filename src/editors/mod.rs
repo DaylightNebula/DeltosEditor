@@ -21,6 +21,7 @@ pub trait FileEditor: Debug + Send {
     /// Supplier of a future to a bundle that represents the editor of a file.
     ///
     /// The future runs in the background, so it can load the file from `source`.  The
-    /// `DeltosEditor` shows a placeholder until it finishes.
-    fn build_editor(&mut self, theme: &Theme, source: Arc<dyn Source>, path: PathBuf) -> BoxFuture<'static, UiBundle>;
+    /// `DeltosEditor` shows a placeholder until it finishes.  When `read_only` is true (the
+    /// source's `Source::read_only`), the editor must not let the file be changed or saved.
+    fn build_editor(&mut self, theme: &Theme, source: Arc<dyn Source>, path: PathBuf, read_only: bool) -> BoxFuture<'static, UiBundle>;
 }

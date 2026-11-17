@@ -8,7 +8,7 @@ use winit::window::{CursorIcon, ResizeDirection};
 #[cfg(windows)]
 use winit::platform::windows::WindowAttributesExtWindows;
 
-use crate::{DeltosEditor, TAB_UUID_NAMESPACE, editors::text::OpenFile, render::{self, TAB_BAR_HEIGHT}, tiles::DropZone};
+use crate::{DeltosEditor, editors::text::OpenFile, render::{self, TAB_BAR_HEIGHT}, tiles::DropZone};
 
 pub const MENU_HOVER: Vec4 = Vec4::new(0.09, 0.09, 0.09, 1.0);
 /// How far the pointer must move with a tab held before it starts dragging, in logical pixels.
@@ -21,25 +21,30 @@ pub const CLOSE_ICON: &str = "\u{ea76}";
 pub struct WindowPlugin;
 impl Plugin for WindowPlugin {
     fn build(self, app: App) -> App {
-        app
+        let app = app
             .add_resource(WindowCursor(CursorIcon::Default))
             .add_resource(TabDrag::default())
+            // builds the UI, so it runs after every other startup system has registered its parts
+            .on_startup_with(setup, pin(SystemPin::End))
+            .on_render_update(scroll_tabs)
+            .on_render_update(click_files)
+            .on_render_update(drag_tabs)
+            .on_render_update(click_tabs)
+            .on_render_update(show_dirty_tabs);
+
+        // the browser's canvas has no window to decorate, move, resize or close
+        #[cfg(not(target_arch = "wasm32"))]
+        let app = app
             .with_window_attributes(|attribs| {
                 let attribs = attribs.with_decorations(false);
                 #[cfg(windows)]
                 let attribs = attribs.with_corner_preference(winit::platform::windows::CornerPreference::Round);
                 attribs
             })
-            // builds the UI, so it runs after every other startup system has registered its parts
-            .on_startup_with(setup, pin(SystemPin::End))
             .on_render_update(window_buttons)
             .on_render_update(drag_window)
-            .on_render_update(scroll_tabs)
-            .on_render_update(resize_window)
-            .on_render_update(click_files)
-            .on_render_update(drag_tabs)
-            .on_render_update(click_tabs)
-            .on_render_update(show_dirty_tabs)
+            .on_render_update(resize_window);
+        app
     }
 }
 
@@ -157,7 +162,8 @@ pub struct FileItem {
     pub path: PathBuf
 }
 
-fn setup(world: World, editor: Res<DeltosEditor>) {
+/// Spawns the camera and builds the editor's whole UI.
+fn setup(world: World, mut editor: ResMut<DeltosEditor>) {
     world.spawn(
         EntityBuilder::new()
             .push(Transform::new(glam::Vec3::new(0.0, 0.0, 6.0), glam::Quat::IDENTITY, glam::Vec3::ONE))
@@ -167,9 +173,14 @@ fn setup(world: World, editor: Res<DeltosEditor>) {
     let root = render::render(&world, &editor);
 
     world.spawn(root.into_entity_builder());
+
+    // the UI was just built from the current state, so earlier rebuild requests are done
+    editor.side_bar_rebuilds.clear();
+    editor.tiles_dirty = false;
 }
 
 /// Minimizes, maximizes or closes the window when a caption button is clicked.
+#[cfg(not(target_arch = "wasm32"))]
 fn window_buttons(input: Res<UiInput>, graphics: Res<Graphics>, mut buttons: Query<&'static WindowButton>) {
     let Some(window) = graphics.window() else { return };
     while let Ok(Some((id, button))) = buttons.next() {
@@ -183,6 +194,7 @@ fn window_buttons(input: Res<UiInput>, graphics: Res<Graphics>, mut buttons: Que
 }
 
 /// Moves the window when the empty tab bar is pressed, and maximizes it on a double click.
+#[cfg(not(target_arch = "wasm32"))]
 fn drag_window(input: Res<UiInput>, graphics: Res<Graphics>, mut regions: Query<&'static DragRegion>) {
     if !input.pressed { return }
     let Some(window) = graphics.window() else { return };
@@ -316,7 +328,7 @@ fn set_drop_preview(world: &World, input: &UiInput, area: Option<(Vec2, Vec2)>) 
 fn show_dirty_tabs(world: World) {
     let dirty: Vec<Uuid> = Query::<&OpenFile>::new(&world).iter()
         .filter(|(_, file)| file.dirty)
-        .map(|(_, file)| tab_id_for(&file.path))
+        .map(|(_, file)| tab_id_for(file.source, &file.path))
         .collect();
 
     let mut buttons = Query::<(&TabCloseButton, &Interaction, &mut Node)>::new(&world);
@@ -334,6 +346,7 @@ fn show_dirty_tabs(world: World) {
 
 /// Starts resizing the window when an edge is pressed, shows the matching arrows over it, and
 /// hides the edges while the window is maximized.
+#[cfg(not(target_arch = "wasm32"))]
 fn resize_window(input: Res<UiInput>, graphics: Res<Graphics>, mut cursor: ResMut<WindowCursor>,
                  mut edges: Query<(&'static ResizeEdge, &'static mut Node)>) {
     let Some(window) = graphics.window() else { return };
@@ -356,6 +369,7 @@ fn resize_window(input: Res<UiInput>, graphics: Res<Graphics>, mut cursor: ResMu
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn resize_cursor(direction: ResizeDirection) -> CursorIcon {
     use ResizeDirection::*;
     match direction {
@@ -366,6 +380,7 @@ fn resize_cursor(direction: ResizeDirection) -> CursorIcon {
     }
 }
 
-fn tab_id_for(path: &Path) -> Uuid {
-    Uuid::new_v5(&TAB_UUID_NAMESPACE, path.as_os_str().as_encoded_bytes())
+/// The ID of the tab showing a file from a source, see `crate::tab_id`.
+fn tab_id_for(source: Uuid, path: &Path) -> Uuid {
+    crate::tab_id(source, path)
 }

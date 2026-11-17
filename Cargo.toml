@@ -10,3 +10,7 @@ gearbox = { path = "../gearbox" }
 log = "0.4"
 uuid = { version = "1.29.0", features = ["v4", "v5"] }
 winit = "0.30"
+
+# uuid needs the browser's crypto for random IDs on the web
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+uuid = { version = "1.29.0", features = ["v4", "v5", "js"] }

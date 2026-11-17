@@ -1,8 +1,9 @@
 use anarchy::World;
 use gearbox::{glam::*, ui::*};
+#[cfg(not(target_arch = "wasm32"))]
 use winit::window::ResizeDirection;
 
-use crate::{DeltosEditor, EditorTab, EditorTile, hover::HoverStyle, side_bar, tiles::{SplitAxis, TileLayout}, top_bar, window::*};
+use crate::{DeltosEditor, EditorTab, EditorTile, hover::HoverStyle, notify, side_bar, tiles::{SplitAxis, TileLayout}, top_bar, window::*};
 
 pub const DIVIDER_SIZE: f32 = 1.5;
 pub const TAB_BAR_HEIGHT: f32 = 40.0;
@@ -42,6 +43,7 @@ pub fn render(world: &World, editor: &DeltosEditor) -> UiBundle {
                 .child(right_side_bar)
         ])
         .child(drop_preview(editor))
+        .child(notify::toast_area())
         .children(resize_edges())
 }
 
@@ -165,6 +167,13 @@ pub(crate) fn tab(editor: &DeltosEditor, tile: &EditorTile, tab: &EditorTab) -> 
         ])
 }
 
+/// Builds the grab areas along the window's edges that resize it.  The browser's canvas can't
+/// be resized that way, so there are none on the web.
+#[cfg(target_arch = "wasm32")]
+fn resize_edges() -> Vec<UiBundle> { Vec::new() }
+
+/// Builds the grab areas along the window's edges that resize it.
+#[cfg(not(target_arch = "wasm32"))]
 fn resize_edges() -> Vec<UiBundle> {
     let auto = Val::Auto;
     let edge = |direction: ResizeDirection, edges: Rect, width: Val, height: Val| {

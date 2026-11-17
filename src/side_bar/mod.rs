@@ -282,6 +282,24 @@ fn click_icons(world: World, editor: Res<DeltosEditor>, input: Res<UiInput>) {
     if rebuild { rebuild_content(&world, &editor, icon.slot, icon.id) }
 }
 
+/// Rebuilds the element shown in a side bar's panel, see `DeltosEditor::request_rebuild`.
+///
+/// Does nothing if the side bar isn't built yet or shows no element.
+///
+/// # Parameters
+/// * world: World the editor's UI lives in.
+/// * editor: Editor whose side bar element is rebuilt.
+/// * slot: The side bar to rebuild.
+pub(crate) fn rebuild_slot(world: &World, editor: &DeltosEditor, slot: SideBarSlot) {
+    let selected = Query::<&SideBarPanel>::new(world)
+        .iter()
+        .find(|(_, panel)| panel.slot == slot)
+        .and_then(|(_, panel)| panel.selected);
+    if let Some(element) = selected {
+        rebuild_content(world, editor, slot, element);
+    }
+}
+
 /// Replaces the content of a side bar's panel with a freshly built element.
 fn rebuild_content(world: &World, editor: &DeltosEditor, slot: SideBarSlot, element: Uuid) {
     let Some(side_bar) = editor.side_bars.get(&element) else { return };
