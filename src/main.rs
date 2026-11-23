@@ -5,6 +5,7 @@ use gearbox::{App, anyhow};
 /// editor starts without sources; see the `web` example for one with sources.
 fn main() -> anyhow::Result<()> {
     let plugin = DeltosPlugin::default();
+
     #[cfg(not(target_arch = "wasm32"))]
     let plugin = plugin.with_source(deltos::sources::local::LocalFileSource);
 

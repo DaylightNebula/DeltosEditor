@@ -8,6 +8,8 @@ anarchy = { path = "../anarchy", features = ["glam"] }
 gearbox = { path = "../gearbox" }
 
 log = "0.4"
+# `std::time::Instant::now` panics on the web; this falls back to it everywhere else
+web-time = "1.1.0"
 uuid = { version = "1.29.0", features = ["v4", "v5"] }
 winit = "0.30"
 

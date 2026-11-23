@@ -11,7 +11,6 @@ use winit::platform::windows::WindowAttributesExtWindows;
 use crate::{DeltosEditor, editors::text::OpenFile, render::{self, TAB_BAR_HEIGHT}, tiles::DropZone};
 
 pub const MENU_HOVER: Vec4 = Vec4::new(0.09, 0.09, 0.09, 1.0);
-/// How far the pointer must move with a tab held before it starts dragging, in logical pixels.
 pub const TAB_DRAG_THRESHOLD: f32 = 6.0;
 pub const TAB_SCROLL_PER_NOTCH: f32 = 48.0;
 pub const GRIP: f32 = 5.0;
@@ -23,6 +22,7 @@ impl Plugin for WindowPlugin {
     fn build(self, app: App) -> App {
         let app = app
             .add_resource(WindowCursor(CursorIcon::Default))
+            .add_resource(WindowMaximized::default())
             .add_resource(TabDrag::default())
             // builds the UI, so it runs after every other startup system has registered its parts
             .on_startup_with(setup, pin(SystemPin::End))
@@ -135,6 +135,33 @@ pub struct ResizeEdge(pub ResizeDirection);
 
 #[derive(Debug, Resource)]
 pub struct WindowCursor(pub CursorIcon);
+
+/// Whether the window is maximized, remembered between frames.
+///
+/// Asking winit `Window::is_maximized` is expensive on macOS for a window without decorations:
+/// it briefly changes the window's style mask, which takes hundreds of milliseconds and makes the
+/// system drop mouse releases.  So it is only asked when the window was resized and has settled.
+///
+/// Fields:
+/// * maximized: Whether the window was maximized when last asked.
+/// * ask_at: When to ask again, `None` while the answer is current.
+#[derive(Debug, Resource)]
+pub struct WindowMaximized {
+    pub maximized: bool,
+    pub ask_at: Option<web_time::Instant>
+}
+
+impl Default for WindowMaximized {
+    /// Not maximized, with the first ask due straight away.  Uses `web_time`, since
+    /// `std::time::Instant::now` panics on wasm32 and this resource is added on every platform.
+    fn default() -> Self {
+        Self { maximized: false, ask_at: Some(web_time::Instant::now()) }
+    }
+}
+
+/// How long the window must stay the same size before it is asked whether it is maximized.
+#[cfg(not(target_arch = "wasm32"))]
+const MAXIMIZED_SETTLE: std::time::Duration = std::time::Duration::from_millis(300);
 
 /// A folder row in the file tree.
 ///
@@ -348,9 +375,21 @@ fn show_dirty_tabs(world: World) {
 /// hides the edges while the window is maximized.
 #[cfg(not(target_arch = "wasm32"))]
 fn resize_window(input: Res<UiInput>, graphics: Res<Graphics>, mut cursor: ResMut<WindowCursor>,
+                 mut state: ResMut<WindowMaximized>, window_events: Event<WindowEvent>,
                  mut edges: Query<(&'static ResizeEdge, &'static mut Node)>) {
     let Some(window) = graphics.window() else { return };
-    let maximized = window.is_maximized();
+
+    // only ask whether the window is maximized once a resize has settled, see `WindowMaximized`
+    for event in window_events.read() {
+        if matches!(event.0, winit::event::WindowEvent::Resized(_)) {
+            state.ask_at = Some(web_time::Instant::now() + MAXIMIZED_SETTLE);
+        }
+    }
+    if state.ask_at.is_some_and(|at| web_time::Instant::now() >= at) {
+        state.maximized = window.is_maximized();
+        state.ask_at = None;
+    }
+    let maximized = state.maximized;
     let mut wanted = CursorIcon::Default;
     while let Ok(Some((id, (edge, mut node)))) = edges.next() {
         // a maximized window has no edges to drag, so they stop covering the UI
