@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 deltos = { path = "../core" }
 gearbox = { path = "../../gearbox" }
+getset = "0.1.7"
+uuid = { version = "1.29.3", features = ["v4"] }
