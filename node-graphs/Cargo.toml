@@ -1,0 +1,8 @@
+[package]
+name = "deltos-node-graphs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+deltos = { path = "../core" }
+gearbox = { path = "../../gearbox" }

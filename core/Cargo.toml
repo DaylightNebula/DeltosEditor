@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anarchy = { path = "../anarchy", features = ["glam"] }
-gearbox = { path = "../gearbox" }
+anarchy = { path = "../../anarchy", features = ["glam"] }
+gearbox = { path = "../../gearbox" }
 
 log = "0.4"
 # `std::time::Instant::now` panics on the web; this falls back to it everywhere else

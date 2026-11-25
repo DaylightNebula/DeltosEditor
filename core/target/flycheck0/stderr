@@ -1,4 +1,0 @@
-    Updating crates.io index
-error: no matching package named `anarchy` found
-location searched: /Users/noahshaw/rust/Deltos/anarchy
-required by package `deltos v0.1.0 (/Users/noahshaw/rust/Deltos/core)`
