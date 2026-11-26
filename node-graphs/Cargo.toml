@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anarchy = { path = "../../anarchy", features = ["glam"] }
 deltos = { path = "../core" }
 gearbox = { path = "../../gearbox" }
 getset = "0.1.7"

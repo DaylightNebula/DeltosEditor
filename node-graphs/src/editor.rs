@@ -1,30 +1,22 @@
-use std::{fmt::Debug, path::PathBuf, sync::Arc};
+use std::{fmt::Debug, path::PathBuf, sync::{Arc, Mutex, PoisonError}};
 
 use deltos::{editors::FileEditor, sources::{BoxFuture, Source}, theme::Theme};
 use gearbox::ui::*;
 
-use crate::{IOButton, NodeGraphTile};
+use crate::{IOButton, NodeGraphTile, TileNode, TilePositions};
 
-/// Font size of a tile's title.
 const TITLE_SIZE: f32 = 18.0;
-
-/// Font size of input and output names.
 const IO_SIZE: f32 = 14.0;
-
-/// Corner radius of a tile's outer box.
 const TILE_RADIUS: f32 = 8.0;
-
-/// Border width of a tile's outer box.
 const TILE_BORDER: f32 = 1.5;
-
-/// Diameter of an input or output dot.
 const IO_DOT: f32 = 10.0;
 
-/// Node Graph Editor
-///
 /// Implemented by anything that describes a node graph for a set of file types.  Wrapped in a
 /// `NodeGraphFileEditor` so the Deltos editor can open files with it.
-pub trait NodeGraphEditor: Debug + Send {
+pub trait NodeGraphEditor: Debug + Send + 'static {
+    /// The tile implementation.
+    type Tile: NodeGraphTile;
+
     /// The display name of this editor.
     fn name(&self) -> String;
 
@@ -32,34 +24,47 @@ pub trait NodeGraphEditor: Debug + Send {
     fn file_types(&self) -> Vec<String>;
 
     /// The tiles of the graph to draw.
-    fn graph(&self) -> Vec<Box<dyn NodeGraphTile>>;
+    fn tiles(&self) -> &[Self::Tile];
+
+    /// The tiles of the graph, mutably.  Used to store a tile's new position when it is dragged.
+    fn tiles_mut(&mut self) -> &mut [Self::Tile];
 }
 
 /// Adapts a `NodeGraphEditor` into a Deltos `FileEditor` that draws its tiles.
 ///
 /// Fields:
-/// * editor: The node graph editor whose tiles are drawn.
+/// * editor: The node graph editor whose tiles are drawn, shared with the drawn tiles so dragging
+///   them can update their positions.
 /// * font: Font used for tile titles and input/output names.
 #[derive(Debug)]
-pub struct NodeGraphFileEditor {
-    editor: Box<dyn NodeGraphEditor>,
+pub struct NodeGraphFileEditor<Editor: NodeGraphEditor> {
+    editor: Arc<Mutex<Editor>>,
     font: Arc<SDFFont>
 }
 
-impl NodeGraphFileEditor {
+impl <Editor: NodeGraphEditor> NodeGraphFileEditor<Editor> {
     /// Wraps a node graph editor so it can be added to the Deltos editor.
     ///
     /// # Parameters
     /// * editor: The node graph editor whose tiles are drawn.
     /// * font: Font used for tile titles and input/output names.
-    pub fn new(editor: Box<dyn NodeGraphEditor>, font: Arc<SDFFont>) -> Self {
-        Self { editor, font }
+    pub fn new(editor: Editor, font: Arc<SDFFont>) -> Self {
+        Self { editor: Arc::new(Mutex::new(editor)), font }
     }
 }
 
-impl FileEditor for NodeGraphFileEditor {
-    fn name(&self) -> String { self.editor.name() }
-    fn file_types(&self) -> Vec<String> { self.editor.file_types() }
+impl <Editor: NodeGraphEditor> NodeGraphFileEditor<Editor> {
+    /// Locks the wrapped editor, still using it if a panic poisoned the lock.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Editor> {
+        self.editor
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl <Editor: NodeGraphEditor> FileEditor for NodeGraphFileEditor<Editor> {
+    fn name(&self) -> String { self.lock().name() }
+    fn file_types(&self) -> Vec<String> { self.lock().file_types() }
 
     fn build_editor(
         &mut self,
@@ -68,12 +73,17 @@ impl FileEditor for NodeGraphFileEditor {
         _path: PathBuf,
         _read_only: bool
     ) -> BoxFuture<'static, UiBundle> {
-        let (theme, font, tiles) = (*theme, self.font.clone(), self.editor.graph());
-        Box::pin(async move {
-            let tiles = tiles
-                .iter()
-                .map(|tile| tile_bundle(&theme, &font, tile.as_ref()));
+        // build the tiles now, since the future can't borrow the editor
+        let positions: Arc<dyn TilePositions> = self.editor.clone();
+        let tiles: Vec<UiBundle> = self
+            .lock()
+            .tiles()
+            .iter()
+            .map(|tile| tile_bundle(theme, &self.font, tile, &positions))
+            .collect();
 
+        let theme = *theme;
+        Box::pin(async move {
             UiBundle::new(
                 Node::row()
                     .grow(1.0)
@@ -95,7 +105,8 @@ impl FileEditor for NodeGraphFileEditor {
 /// Nodes clip their children, so the tile is a transparent wrapper half a dot wider than its box
 /// on each side.  The box is drawn behind the content, which lets the input and output dots
 /// overlap its left and right edges.
-fn tile_bundle(theme: &Theme, font: &Arc<SDFFont>, tile: &dyn NodeGraphTile) -> UiBundle {
+fn tile_bundle<T: NodeGraphTile>(theme: &Theme, font: &Arc<SDFFont>, tile: &T, positions: &Arc<dyn TilePositions>) -> UiBundle {
+    let position = tile.position();
     let overhang = IO_DOT / 2.0;
     let inner_radius = TILE_RADIUS - TILE_BORDER;
 
@@ -144,6 +155,7 @@ fn tile_bundle(theme: &Theme, font: &Arc<SDFFont>, tile: &dyn NodeGraphTile) -> 
 
     UiBundle::new(
         Node::column()
+            .absolute(Rect::new_top_left(px(position.y), px(position.x)))
             .padding(Rect::new(
                 px(TILE_BORDER),
                 px(TILE_BORDER),
@@ -151,6 +163,8 @@ fn tile_bundle(theme: &Theme, font: &Arc<SDFFont>, tile: &dyn NodeGraphTile) -> 
                 px(overhang + TILE_BORDER)
             ))
     )
+    .with(TileNode { tile_id: tile.tile_id(), positions: positions.clone() })
+    .interactive()
     .child(outer_box)
     .child(title_bar)
     .child(body)
