@@ -1,54 +1,154 @@
-use std::{fmt::Debug, sync::{Arc, Mutex, PoisonError}};
+use std::{collections::HashMap, fmt::Debug, sync::{Arc, Mutex, MutexGuard, PoisonError}};
 
-use anarchy::{Component, EntityID, Res, ResMut, Resource, World};
-use gearbox::{Plugin, glam::Vec2, ui::{ComputedNode, Node, PositionType, Rect, UiInput, px}};
+use anarchy::{Component, ComponentMeta, EntityID, Query, Res, ResMut, Resource, World};
+use deltos::{DeltosEditor, theme::Theme};
+use gearbox::{Plugin, anyhow::{self, Context}, glam::{Vec2, Vec4}, ui::{ComputedNode, Display, EntityUiElements, Node, PositionType, Rect, UiInput, px}};
 use uuid::Uuid;
 
-use crate::{editor::NodeGraphEditor, tiles::NodeGraphTile};
+use crate::{editor::NodeGraphEditor, tiles::{NodeGraphTile, WireRules}};
 
 pub mod editor;
 pub mod tiles;
 
+/// Adds the systems that drag tiles, highlight hovered input and output dots, connect dots with
+/// wires, and disconnect wires.
 pub struct DeltosNodeGraphPlugin;
 impl Plugin for DeltosNodeGraphPlugin {
     fn build(self, app: gearbox::App) -> gearbox::App {
         app
             .add_resource(TileDrag::default())
+            .add_resource(PendingWire::default())
             .on_render_update(drag_tiles)
+            .on_render_update(hover_rings)
+            .on_render_update(connect_wires)
+            .on_render_update(disconnect_wires)
+            .on_render_update(draw_wires)
     }
 }
 
-/// Updates the stored position of a drawn tile.  Implemented for the editor shared by a
-/// `NodeGraphFileEditor`, and used by `drag_tiles` when a tile is dropped.
-pub trait TilePositions: Debug + Send + Sync {
-    /// Calls `NodeGraphTile::set_position` on the tile with `tile_id`, if there is one.
+/// A node graph editor shared between a `NodeGraphFileEditor` and the UI it built, so the
+/// systems in this crate can change the graph.  Implemented for the editor's `Mutex`.
+pub trait SharedGraph: Debug + Send + Sync {
+    /// Calls `NodeGraphTile::set_position` on the tile with `tile_id`, if there is one.  Used by
+    /// `drag_tiles` when a tile is dropped.
     fn set_tile_position(&self, tile_id: Uuid, position: Vec2);
+
+    /// Calls `NodeGraphTile::connect` on the output's tile.  Used by `connect_wires` when a wire
+    /// is finished.
+    fn connect(&self, output_tile: Uuid, output_button: Uuid, input_tile: Uuid, input_button: Uuid) -> anyhow::Result<()>;
+
+    /// Calls `NodeGraphTile::disconnect` on the output's tile.  Used by `connect_wires` to replace
+    /// the wire of a full `WireRules::Single` end.
+    fn disconnect(&self, output_tile: Uuid, output_button: Uuid, input_tile: Uuid, input_button: Uuid) -> anyhow::Result<()>;
+
+    /// The wires out of every tile's outputs, drawn by `draw_wires`.
+    fn wires(&self, theme: &Theme) -> Vec<WireNode>;
 }
 
-impl<Editor: NodeGraphEditor> TilePositions for Mutex<Editor> {
+impl<Editor: NodeGraphEditor> SharedGraph for Mutex<Editor> {
     fn set_tile_position(&self, tile_id: Uuid, position: Vec2) {
-        let mut editor = self
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if let Some(tile) = editor
+        if let Some(tile) = lock(self)
             .tiles_mut()
             .iter_mut()
             .find(|tile| tile.tile_id() == tile_id) {
             tile.set_position(position);
         }
     }
+
+    fn connect(&self, output_tile: Uuid, output_button: Uuid, input_tile: Uuid, input_button: Uuid) -> anyhow::Result<()> {
+        lock(self)
+            .tiles_mut()
+            .iter_mut()
+            .find(|tile| tile.tile_id() == output_tile)
+            .with_context(|| format!("No tile {output_tile} in the graph"))?
+            .connect(output_button, input_tile, input_button)
+    }
+
+    fn disconnect(&self, output_tile: Uuid, output_button: Uuid, input_tile: Uuid, input_button: Uuid) -> anyhow::Result<()> {
+        lock(self)
+            .tiles_mut()
+            .iter_mut()
+            .find(|tile| tile.tile_id() == output_tile)
+            .with_context(|| format!("No tile {output_tile} in the graph"))?
+            .disconnect(output_button, input_tile, input_button)
+    }
+
+    fn wires(&self, theme: &Theme) -> Vec<WireNode> { editor::wire_nodes(&*lock(self), theme) }
+}
+
+/// Locks a shared editor, still using it if a panic poisoned the lock.
+pub(crate) fn lock<Editor>(editor: &Mutex<Editor>) -> MutexGuard<'_, Editor> {
+    editor
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Marks the root UI node of a drawn graph.
+///
+/// Fields:
+/// * graph: The graph this node draws.
+#[derive(Debug, Clone, Component)]
+pub struct GraphRoot {
+    pub graph: Arc<dyn SharedGraph>
 }
 
 /// Marks the root UI node of a drawn tile so `drag_tiles` can move it.
 ///
 /// Fields:
 /// * tile_id: ID of the `NodeGraphTile` this node draws.
-/// * positions: Editor the tile belongs to, told the tile's new position when it is dropped.
-#[derive(Debug, Clone, Component)]
+#[derive(Debug, Clone, Copy, Component)]
 pub struct TileNode {
-    pub tile_id: Uuid,
-    pub positions: Arc<dyn TilePositions>
+    pub tile_id: Uuid
 }
+
+/// Marks the dot of an input or output, which wires are drawn between.
+///
+/// Fields:
+/// * tile_id: ID of the tile the dot is on.
+/// * button_id: `IOButton::id` of the input or output, which identifies it.
+/// * name: Name of the input or output, only used in messages.
+/// * output: Whether the dot is an output rather than an input.
+/// * color: Color of the dot.
+/// * rules: How many wires the input or output can have, kept by `connect_wires`.
+#[derive(Debug, Clone, Component)]
+pub struct IODot {
+    pub tile_id: Uuid,
+    pub button_id: Uuid,
+    pub name: String,
+    pub output: bool,
+    pub color: Vec4,
+    pub rules: WireRules
+}
+
+/// A wire drawn from an output to an input, a child of its graph's `GraphRoot`.
+///
+/// Fields:
+/// * output_tile: ID of the tile the wire starts on.
+/// * output_button: `IOButton::id` of the output the wire starts at.
+/// * input_tile: ID of the tile the wire ends on.
+/// * input_button: `IOButton::id` of the input the wire ends at.
+/// * color: Color of the wire, the output's color.
+/// * drawn: The ends the wire was last drawn between, in logical pixels from the graph's top
+///   left, `None` while either end isn't shown.
+/// * hovered: Whether the wire was last drawn hovered, which draws it wider.
+#[derive(Debug, Clone, Component)]
+pub struct WireNode {
+    pub output_tile: Uuid,
+    pub output_button: Uuid,
+    pub input_tile: Uuid,
+    pub input_button: Uuid,
+    pub color: Vec4,
+    pub drawn: Option<(Vec2, Vec2)>,
+    pub hovered: bool
+}
+
+/// Marks the ring shown around the hovered dot of a graph.
+#[derive(Debug, Clone, Copy, Component)]
+pub struct HoverRing;
+
+/// Marks the wire drawn from a clicked dot to the pointer, before the wire is finished.
+#[derive(Debug, Clone, Copy, Component)]
+pub struct WirePreview;
 
 /// A tile held by the pointer.
 ///
@@ -70,12 +170,19 @@ pub struct HeldTile {
 #[derive(Debug, Default, Resource)]
 pub struct TileDrag(pub Option<HeldTile>);
 
+/// The dot a wire was started from, if any.
+///
+/// Fields:
+/// * 0: The clicked `IODot` node, `None` while no wire is being made.
+#[derive(Debug, Default, Resource)]
+pub struct PendingWire(pub Option<EntityID>);
+
 /// Drags tiles around: pressing a tile picks it up, and it follows the pointer until let go.
 /// Dropping a tile that moved stores its new position with `NodeGraphTile::set_position`.
 fn drag_tiles(world: World, input: Res<UiInput>, mut drag: ResMut<TileDrag>) {
     // pick up a tile when it is pressed
-    if input.pressed && let Some(id) = input.hovered && world.handle(id).get::<&TileNode>().ok().flatten().is_some() {
-        let Some(position) = computed_position(&world, id) else { return };
+    if input.pressed && let Some(id) = input.hovered && has::<TileNode>(&world, id) {
+        let Some((position, _)) = computed_rect(&world, id) else { return };
         drag.0 = Some(HeldTile { entity: id, grab: input.cursor - position, offset: None });
     }
     let Some(mut held) = drag.0 else { return };
@@ -83,14 +190,10 @@ fn drag_tiles(world: World, input: Res<UiInput>, mut drag: ResMut<TileDrag>) {
     // drop the tile, storing where it ended up
     if !input.down {
         drag.0 = None;
-        let tile = world
-            .handle(held.entity)
-            .get::<&TileNode>()
-            .ok()
-            .flatten()
-            .map(|tile| tile.clone());
-        if let (Some(tile), Some(offset)) = (tile, held.offset) {
-            tile.positions.set_tile_position(tile.tile_id, offset);
+        let tile = component::<TileNode>(&world, held.entity);
+        let root = root_of(&world, held.entity).and_then(|root| component::<GraphRoot>(&world, root));
+        if let (Some(tile), Some(root), Some(offset)) = (tile, root, held.offset) {
+            root.graph.set_tile_position(tile.tile_id, offset);
         }
         return;
     }
@@ -99,28 +202,354 @@ fn drag_tiles(world: World, input: Res<UiInput>, mut drag: ResMut<TileDrag>) {
     let parent = world
         .hierarchy()
         .parent(held.entity)
-        .and_then(|parent| computed_position(&world, parent))
-        .unwrap_or(Vec2::ZERO);
-    let offset = (input.cursor - held.grab - parent) / input.scale.max(f32::EPSILON);
+        .and_then(|parent| computed_rect(&world, parent))
+        .map_or(Vec2::ZERO, |(position, _)| position);
+    let offset = (input.cursor - held.grab - parent) / scale(&input);
     if held.offset != Some(offset) {
-        set_offset(&world, held.entity, offset);
+        if let Ok(Some(mut node)) = world.handle(held.entity).get::<&mut Node>() {
+            set_top_left(&mut node, offset);
+        }
         held.offset = Some(offset);
         drag.0 = Some(held);
     }
 }
 
-/// The laid out position of `entity`'s node in window pixels.
-fn computed_position(world: &World, entity: EntityID) -> Option<Vec2> {
+/// Shows a second circle around the dot under the pointer, in the dot's color.
+fn hover_rings(world: World, input: Res<UiInput>) {
+    // find the hovered dot and where it is in its graph
+    let hovered = input.hovered.and_then(|id| {
+        let dot = component::<IODot>(&world, id)?;
+        let root = root_of(&world, id)?;
+        Some((root, center_in(&world, root, id, scale(&input))?, dot.color))
+    });
+
+    // show the ring of the graph with the hovered dot, and hide the others
+    for (ring, root) in children_with::<HoverRing>(&world) {
+        let Ok(Some(mut node)) = world.handle(ring).get::<&mut Node>() else { continue };
+        match hovered {
+            Some((hovered_root, center, color)) if hovered_root == root => {
+                set_top_left(&mut node, center - Vec2::splat(editor::RING_SIZE / 2.0));
+                if *node.style().border_color() != Some(color) {
+                    node.style_mut().set_border_color(Some(color));
+                }
+                set_shown(&mut node, true);
+            }
+            _ => set_shown(&mut node, false)
+        }
+    }
+}
+
+/// Connects dots with wires: clicking one dot starts a wire, and clicking a dot on the other
+/// side of a tile finishes it with `NodeGraphTile::connect`.  A full `WireRules::Single` end
+/// lets go of its wire to make room, and a full `WireRules::Capped` end refuses the new wire.  Clicking the same dot again or
+/// anywhere off a dot drops the wire.  While a wire is started, a preview of it follows the
+/// pointer, snapping to a dot that can finish it.
+fn connect_wires(world: World, input: Res<UiInput>, editor: Res<DeltosEditor>, mut pending: ResMut<PendingWire>) {
+    // a press anywhere but a dot drops the started wire
+    let hovered_dot = input.hovered.filter(|id| has::<IODot>(&world, *id));
+    if input.pressed && hovered_dot.is_none() { pending.0 = None }
+
+    // clicking a dot starts a wire, or finishes the started one
+    if let Some(clicked) = hovered_dot.filter(|id| input.activated(*id)) {
+        pending.0 = match pending.0 {
+            Some(start) if start == clicked => None,
+            Some(start) if finish_wire(&world, &editor.theme, start, clicked) => None,
+            _ => Some(clicked)
+        };
+    }
+
+    draw_preview(&world, &input, pending.0, hovered_dot);
+}
+
+/// Connects the output and input of `a` and `b`, then redraws the wires of every view of their
+/// graph.  Returns false without connecting if they aren't an output and an input of one graph.
+/// Wires that already exist aren't connected again.  To keep both ends within their `WireRules`,
+/// a full `Single` end has its wire disconnected first, and a full `Capped` end refuses.
+fn finish_wire(world: &World, theme: &Theme, a: EntityID, b: EntityID) -> bool {
+    let (Some(dot_a), Some(dot_b)) = (component::<IODot>(world, a), component::<IODot>(world, b)) else { return false };
+    let Some(root) = root_of(world, a) else { return false };
+    if dot_a.output == dot_b.output || root_of(world, b) != Some(root) { return false }
+    let Some(GraphRoot { graph }) = component::<GraphRoot>(world, root) else { return false };
+
+    // skip wires that exist already
+    let (output, input) = if dot_a.output { (dot_a, dot_b) } else { (dot_b, dot_a) };
+    let current = graph.wires(theme);
+    let from_output = |wire: &&WireNode| wire.output_tile == output.tile_id && wire.output_button == output.button_id;
+    let into_input = |wire: &&WireNode| wire.input_tile == input.tile_id && wire.input_button == input.button_id;
+    if current.iter().any(|wire| from_output(&wire) && into_input(&wire)) { return true }
+
+    // full single ends give up their wire, other full ends refuse the new one
+    let ends: [(WireRules, Vec<&WireNode>); 2] = [
+        (output.rules, current.iter().filter(from_output).collect()),
+        (input.rules, current.iter().filter(into_input).collect())
+    ];
+    let mut replaced = Vec::new();
+    for (rules, wires) in ends {
+        if allows_another(rules, wires.len()) { continue }
+        if !matches!(rules, WireRules::Single) {
+            eprintln!("Can't connect {} to {}: it would break their wire rules", output.name, input.name);
+            return true;
+        }
+        replaced.extend(wires);
+    }
+
+    // disconnect the replaced wires, then connect through the output's tile
+    let disconnected = replaced
+        .iter()
+        .try_for_each(|wire| graph.disconnect(wire.output_tile, wire.output_button, wire.input_tile, wire.input_button));
+    let result = disconnected.and_then(|_| graph.connect(output.tile_id, output.button_id, input.tile_id, input.button_id));
+    if let Err(err) = result {
+        eprintln!("Failed to connect {} to {}: {err:#}", output.name, input.name);
+
+        // the graph is unchanged if nothing was disconnected, otherwise its wires still need redrawing
+        if replaced.is_empty() { return true }
+    }
+
+    respawn_wires(world, theme, &graph);
+    true
+}
+
+/// Disconnects the wire under the pointer when it is right clicked, which is also a two finger
+/// tap on most trackpads.  Wires are drawn behind the tiles, so clicks over a tile are left alone.
+fn disconnect_wires(world: World, input: Res<UiInput>, layout: Res<EntityUiElements>, editor: Res<DeltosEditor>) {
+    if !input.right_pressed { return }
+    let Some(id) = wire_under_pointer(&world, &input, &layout) else { return };
+    let Some(wire) = component::<WireNode>(&world, id) else { return };
+    let Some(root) = world.hierarchy().parent(id) else { return };
+    let Some(GraphRoot { graph }) = component::<GraphRoot>(&world, root) else { return };
+
+    // disconnect it and redraw the graph's wires
+    if let Err(err) = graph.disconnect(wire.output_tile, wire.output_button, wire.input_tile, wire.input_button) {
+        eprintln!("Failed to disconnect output {} from input {}: {err:#}", wire.output_button, wire.input_button);
+        return;
+    }
+    respawn_wires(&world, &editor.theme, &graph);
+}
+
+/// The wire closest to the pointer, within `editor::WIRE_HIT_DISTANCE` of it, in the shown graph
+/// under the pointer.  Wires are drawn behind the tiles, so there's none while the pointer is over
+/// a tile or dot.
+fn wire_under_pointer(world: &World, input: &UiInput, layout: &EntityUiElements) -> Option<EntityID> {
+    if input.hovered.is_some() { return None }
+    let scale = scale(input);
+
+    let wires: Vec<(EntityID, WireNode)> = Query::<&WireNode>::new(world)
+        .iter()
+        .map(|(id, wire)| (id, wire.clone()))
+        .collect();
+    let mut closest: Option<(f32, EntityID)> = None;
+    for (id, wire) in wires {
+        // only wires drawn in a graph shown under the pointer
+        let Some((start, end)) = wire.drawn else { continue };
+        let Some(root) = world.hierarchy().parent(id) else { continue };
+        let Ok(Some(computed)) = world.handle(root).get::<&ComputedNode>() else { continue };
+        if computed.pass != layout.pass || !computed.contains(input.cursor) { continue }
+
+        let distance = editor::wire_distance(start, end, (input.cursor - computed.position) / scale);
+        if distance <= editor::WIRE_HIT_DISTANCE && closest.is_none_or(|(best, _)| distance < best) {
+            closest = Some((distance, id));
+        }
+    }
+    closest.map(|(_, id)| id)
+}
+
+/// Replaces the drawn wires of every view of `graph` with the graph's current ones.
+fn respawn_wires(world: &World, theme: &Theme, graph: &Arc<dyn SharedGraph>) {
+    let wires = graph.wires(theme);
+    let roots: Vec<EntityID> = Query::<&GraphRoot>::new(world)
+        .iter()
+        .filter(|(_, root)| Arc::ptr_eq(&root.graph, graph))
+        .map(|(id, _)| id)
+        .collect();
+    for root in roots {
+        let old: Vec<EntityID> = children_with::<WireNode>(world)
+            .into_iter()
+            .filter(|(_, parent)| *parent == root)
+            .map(|(id, _)| id)
+            .collect();
+        for id in old { world.handle(id).despawn_recursive(); }
+        for wire in &wires {
+            world.spawn_with_parent(Some(root), editor::wire_bundle(wire.clone()).into_entity_builder());
+        }
+    }
+}
+
+/// Draws the started wire from `pending` to the pointer, or to `hovered` if it can finish the
+/// wire, and hides the previews of other graphs.  The preview takes the output's color, or the
+/// started input's color until an output is hovered.
+fn draw_preview(world: &World, input: &UiInput, pending: Option<EntityID>, hovered: Option<EntityID>) {
+    let scale = scale(input);
+    let preview = pending.and_then(|start| {
+        let dot = component::<IODot>(world, start)?;
+        let root = root_of(world, start)?;
+        let from = center_in(world, root, start, scale)?;
+
+        // snap to a hovered dot on the other side, otherwise follow the pointer
+        let target = hovered
+            .and_then(|id| Some((id, component::<IODot>(world, id)?)))
+            .filter(|(id, target)| target.output != dot.output && root_of(world, *id) == Some(root))
+            .and_then(|(id, target)| Some((center_in(world, root, id, scale)?, target)));
+        let to = match &target {
+            Some((center, _)) => *center,
+            None => (input.cursor - computed_rect(world, root)?.0) / scale
+        };
+
+        // wires run from the output to the input, in the output's color
+        let color = if dot.output { dot.color } else { target.as_ref().map_or(dot.color, |(_, target)| target.color) };
+        let (start, end) = if dot.output { (from, to) } else { (to, from) };
+        Some((root, start, end, color))
+    });
+
+    for (id, root) in children_with::<WirePreview>(world) {
+        let Ok(Some(mut node)) = world.handle(id).get::<&mut Node>() else { continue };
+        match preview {
+            Some((preview_root, start, end, color)) if preview_root == root => {
+                editor::draw_wire(&mut node, start, end, color, editor::WIRE_THICKNESS);
+                set_shown(&mut node, true);
+            }
+            _ => set_shown(&mut node, false)
+        }
+    }
+}
+
+/// Keeps every wire drawn between its output's and input's dots, so wires follow dragged tiles,
+/// and draws the wire under the pointer a little wider.  Wires whose dots aren't shown are hidden.
+fn draw_wires(world: World, input: Res<UiInput>, layout: Res<EntityUiElements>) {
+    let scale = scale(&input);
+    let hovered = wire_under_pointer(&world, &input, &layout);
+
+    // find every dot's center in its graph
+    let dots: Vec<(EntityID, IODot)> = Query::<&IODot>::new(&world)
+        .iter()
+        .map(|(id, dot)| (id, dot.clone()))
+        .collect();
+    let mut centers = HashMap::new();
+    for (id, dot) in dots {
+        let Some(root) = root_of(&world, id) else { continue };
+        if let Some(center) = center_in(&world, root, id, scale) {
+            centers.insert((root, dot.tile_id, dot.button_id, dot.output), center);
+        }
+    }
+
+    // redraw the wires whose ends moved or that were hovered or left
+    let wires: Vec<(EntityID, WireNode)> = Query::<&WireNode>::new(&world)
+        .iter()
+        .map(|(id, wire)| (id, wire.clone()))
+        .collect();
+    for (id, wire) in wires {
+        let Some(root) = world.hierarchy().parent(id) else { continue };
+        let start = centers.get(&(root, wire.output_tile, wire.output_button, true));
+        let end = centers.get(&(root, wire.input_tile, wire.input_button, false));
+        let ends = start.copied().zip(end.copied());
+        let is_hovered = hovered == Some(id);
+        if ends == wire.drawn && is_hovered == wire.hovered { continue }
+
+        if let Ok(Some(mut node)) = world.handle(id).get::<&mut Node>() {
+            let thickness = if is_hovered { editor::WIRE_HOVER_THICKNESS } else { editor::WIRE_THICKNESS };
+            if let Some((start, end)) = ends { editor::draw_wire(&mut node, start, end, wire.color, thickness) }
+            set_shown(&mut node, ends.is_some());
+        }
+        if let Ok(Some(mut wire)) = world.handle(id).get::<&mut WireNode>() {
+            wire.drawn = ends;
+            wire.hovered = is_hovered;
+        }
+    }
+}
+
+/// Whether an input or output with `rules` and `count` wires can take another.
+fn allows_another(rules: WireRules, count: usize) -> bool {
+    match rules {
+        WireRules::Single => count < 1,
+        WireRules::Multi => true,
+        WireRules::Capped(cap) => count < cap
+    }
+}
+
+/// Window pixels per logical pixel.
+fn scale(input: &UiInput) -> f32 { input.scale.max(f32::EPSILON) }
+
+/// Whether `entity` has a `T`.
+fn has<T: ComponentMeta + Sync>(world: &World, entity: EntityID) -> bool {
+    world.handle(entity).get::<&T>().ok().flatten().is_some()
+}
+
+/// A copy of `entity`'s `T`, if it has one.
+fn component<T: ComponentMeta + Clone + Sync>(world: &World, entity: EntityID) -> Option<T> {
+    world
+        .handle(entity)
+        .get::<&T>()
+        .ok()
+        .flatten()
+        .map(|found| found.clone())
+}
+
+/// Every node with a `T`, paired with its parent.
+fn children_with<T: ComponentMeta + Sync>(world: &World) -> Vec<(EntityID, EntityID)> {
+    let ids: Vec<EntityID> = Query::<&T>::new(world)
+        .iter()
+        .map(|(id, _)| id)
+        .collect();
+    ids
+        .into_iter()
+        .filter_map(|id| Some((id, world.hierarchy().parent(id)?)))
+        .collect()
+}
+
+/// The `GraphRoot` node `entity` is drawn in.
+fn root_of(world: &World, entity: EntityID) -> Option<EntityID> {
+    world
+        .hierarchy()
+        .ancestors(entity)
+        .find(|ancestor| has::<GraphRoot>(world, *ancestor))
+}
+
+/// The laid out position and size of `entity`'s node in window pixels.
+fn computed_rect(world: &World, entity: EntityID) -> Option<(Vec2, Vec2)> {
     world
         .handle(entity)
         .get::<&ComputedNode>()
         .ok()
         .flatten()
-        .map(|computed| computed.position)
+        .map(|computed| (computed.position, computed.size))
 }
 
-/// Places `entity`'s node at `offset` logical pixels from its parent's top left.
-fn set_offset(world: &World, entity: EntityID, offset: Vec2) {
-    let Ok(Some(mut node)) = world.handle(entity).get::<&mut Node>() else { return };
-    node.style_mut().set_position_type(PositionType::Absolute(Rect::new_top_left(px(offset.y), px(offset.x))));
+/// The center of `entity`'s node in logical pixels from `root`'s top left.
+fn center_in(world: &World, root: EntityID, entity: EntityID, scale: f32) -> Option<Vec2> {
+    let (root_position, _) = computed_rect(world, root)?;
+    let (position, size) = computed_rect(world, entity)?;
+    Some((position + size / 2.0 - root_position) / scale)
+}
+
+/// Places `node` at `offset` logical pixels from its parent's top left.
+pub(crate) fn set_top_left(node: &mut Node, offset: Vec2) {
+    let edges = Rect::new_top_left(px(offset.y), px(offset.x));
+
+    // only touch the style when the offset actually changes
+    let unchanged = matches!(node.style().position_type(), PositionType::Absolute(current) if *current == edges);
+    if !unchanged {
+        node.style_mut().set_position_type(PositionType::Absolute(edges));
+    }
+}
+
+/// Shows or hides `node`, only touching its style when that changes.
+fn set_shown(node: &mut Node, shown: bool) {
+    let display = if shown { Display::Flex } else { Display::None };
+    if *node.style().display() != display {
+        node.style_mut().set_display(display);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wire_rules_cap_wire_counts() {
+        assert!(allows_another(WireRules::Single, 0));
+        assert!(!allows_another(WireRules::Single, 1));
+        assert!(allows_another(WireRules::Multi, 1_000));
+        assert!(allows_another(WireRules::Capped(2), 1));
+        assert!(!allows_another(WireRules::Capped(2), 2));
+        assert!(!allows_another(WireRules::Capped(0), 0));
+    }
 }

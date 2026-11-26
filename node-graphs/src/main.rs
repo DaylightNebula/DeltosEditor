@@ -1,17 +1,36 @@
 use deltos::{DeltosEditor, DeltosPlugin, editors::text::SimpleTextDeltosEditorPlugin, theme::Theme};
-use deltos_node_graphs::{DeltosNodeGraphPlugin, editor::{NodeGraphEditor, NodeGraphFileEditor}, tiles::{IOButton, NodeGraphTile}};
-use gearbox::{App, Plugin, anarchy::ResMut, anyhow, glam::{Vec2, Vec4}};
+use deltos_node_graphs::{DeltosNodeGraphPlugin, editor::{NodeGraphEditor, NodeGraphFileEditor}, tiles::{IOButton, NodeGraphTile, Wire, WireRules, Wires}};
+use gearbox::{App, Plugin, anarchy::ResMut, anyhow::{self, Context}, glam::{Vec2, Vec4}};
 use uuid::Uuid;
+
+/// ID of every transform tile's "Position" input.  Wires also name the tile, so button IDs only
+/// need to be unique within a tile.
+const POSITION_INPUT: Uuid = Uuid::from_u128(1);
+
+/// ID of every transform tile's "Scale" input.
+const SCALE_INPUT: Uuid = Uuid::from_u128(2);
+
+/// ID of every transform tile's "Transform" output.
+const TRANSFORM_OUTPUT: Uuid = Uuid::from_u128(3);
 
 /// Demo tile that builds a transform from a position and a scale.
 ///
 /// Fields:
 /// * tile_id: Unique ID of this tile.
 /// * position: Where the tile is drawn, in logical pixels from the graph's top left.
+/// * wires: The wires out of the "Transform" output.
 #[derive(Debug)]
 struct TransformTile {
     tile_id: Uuid,
-    position: Vec2
+    position: Vec2,
+    wires: Vec<Wire>
+}
+
+impl TransformTile {
+    /// Creates an unconnected transform tile at `position`.
+    fn new(position: Vec2) -> Self {
+        Self { tile_id: Uuid::new_v4(), position, wires: Vec::new() }
+    }
 }
 
 impl NodeGraphTile for TransformTile {
@@ -24,19 +43,37 @@ impl NodeGraphTile for TransformTile {
         self.position = position;
     }
 
+    fn connect(&mut self, output_button_id: Uuid, input_tile_id: Uuid, input_button_id: Uuid) -> anyhow::Result<()> {
+        anyhow::ensure!(output_button_id == TRANSFORM_OUTPUT, "No output with ID {output_button_id}");
+        anyhow::ensure!(input_tile_id != self.tile_id, "A tile can't connect to itself");
+        self.wires.push(Wire::new(input_tile_id, input_button_id));
+        Ok(())
+    }
+
+    fn disconnect(&mut self, output_button_id: Uuid, input_tile_id: Uuid, input_button_id: Uuid) -> anyhow::Result<()> {
+        anyhow::ensure!(output_button_id == TRANSFORM_OUTPUT, "No output with ID {output_button_id}");
+        let wire = Wire::new(input_tile_id, input_button_id);
+        let index = self.wires
+            .iter()
+            .position(|existing| *existing == wire)
+            .with_context(|| format!("Transform isn't connected to input {input_button_id}"))?;
+        self.wires.remove(index);
+        Ok(())
+    }
+
     fn inputs(&self, theme: &Theme) -> Vec<IOButton> {
         vec![
-            IOButton::new("Position", theme.blue),
-            IOButton::new("Scale", theme.green)
+            IOButton::new(POSITION_INPUT, "Position", theme.blue, WireRules::Single),
+            IOButton::new(SCALE_INPUT, "Scale", theme.green, WireRules::Single)
         ]
     }
 
-    fn outputs(&self, theme: &Theme) -> Vec<IOButton> {
-        vec![IOButton::new("Transform", theme.purple)]
+    fn outputs(&self, theme: &Theme) -> Vec<(IOButton, Wires)> {
+        vec![(IOButton::new(TRANSFORM_OUTPUT, "Transform", theme.purple, WireRules::Multi), Wires::new(self.wires.clone()))]
     }
 }
 
-/// Demo node graph editor that shows a single tile for `.graph` files.
+/// Demo node graph editor that shows three connectable tiles for `.graph` files.
 ///
 /// Fields:
 /// * tiles: The tiles of the graph.
@@ -65,7 +102,11 @@ impl Plugin for DemoNodeGraphPlugin {
         app .add_plugin(DeltosNodeGraphPlugin)
             .on_startup(|mut editor: ResMut<DeltosEditor>| {
                 let demo = DemoNodeGraphEditor {
-                    tiles: vec![TransformTile { tile_id: Uuid::new_v4(), position: Vec2::new(40.0, 40.0) }]
+                    tiles: vec![
+                        TransformTile::new(Vec2::new(40.0, 40.0)),
+                        TransformTile::new(Vec2::new(320.0, 160.0)),
+                        TransformTile::new(Vec2::new(320.0, 340.0))
+                    ]
                 };
                 let graph_editor = NodeGraphFileEditor::new(demo, editor.font.clone());
                 editor.add_editor(Box::new(graph_editor), false);
