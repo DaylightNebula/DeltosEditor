@@ -1,6 +1,6 @@
 use deltos::{DeltosEditor, DeltosPlugin, editors::text::SimpleTextDeltosEditorPlugin, theme::Theme};
 use deltos_node_graphs::{DeltosNodeGraphPlugin, editor::{NodeGraphEditor, NodeGraphFileEditor}, tiles::{IOButton, NodeGraphTile, Wire, WireRules, Wires}};
-use gearbox::{App, Plugin, anarchy::ResMut, anyhow::{self, Context}, glam::{Vec2, Vec4}};
+use gearbox::{App, Plugin, anarchy::ResMut, anyhow::{self, Context}, glam::{Vec2, Vec4}, ui::{Node, Rect, UiBundle, px, themed}};
 use uuid::Uuid;
 
 /// ID of every transform tile's "Position" input.  Wires also name the tile, so button IDs only
@@ -122,6 +122,13 @@ impl NodeGraphEditor for DemoNodeGraphEditor {
     fn tiles(&self) -> &[TransformTile] { &self.tiles }
 
     fn tiles_mut(&mut self) -> &mut [TransformTile] { &mut self.tiles }
+
+    fn overlay(&self) -> Option<UiBundle> {
+        // a demo button pinned to the top right of the graph
+        let button = themed::button("Overlay");
+        let corner = UiBundle::new(Node::row().absolute(Rect::new_top_right(px(12.0), px(12.0))));
+        Some(corner.child(button))
+    }
 }
 
 /// Registers the demo node graph editor with the Deltos editor.

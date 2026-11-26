@@ -68,6 +68,11 @@ pub trait NodeGraphEditor: Debug + Send + 'static {
 
     /// The tiles of the graph, mutably.  Used to store a tile's new position when it is dragged.
     fn tiles_mut(&mut self) -> &mut [Self::Tile];
+
+    /// An overlay drawn over the graph, or `None` for no overlay, the default.  It is added as the
+    /// last child of the graph view, so it is drawn above the tiles and wires and doesn't move when
+    /// the graph is panned.  Place it with `Node::absolute`, such as in a corner of the view.
+    fn overlay(&self) -> Option<UiBundle> { None }
 }
 
 /// Adapts a `NodeGraphEditor` into a Deltos `FileEditor` that draws its tiles.
@@ -137,9 +142,10 @@ fn graph_bundle<Editor: NodeGraphEditor>(theme: &Theme, font: &Arc<SDFFont>, edi
         .map(wire_bundle)
         .collect();
     let new_tile_menu = new_tile_menu(editor.new_tile_options());
+    let overlay = editor.overlay();
     let graph: Arc<dyn SharedGraph> = Arc::new(Mutex::new(editor));
 
-    UiBundle::new(
+    let graph_view = UiBundle::new(
         Node::row()
             .grow(1.0)
             .width(Val::Percent(1.0))
@@ -157,7 +163,13 @@ fn graph_bundle<Editor: NodeGraphEditor>(theme: &Theme, font: &Arc<SDFFont>, edi
         .children(wires)
         .children(tiles)
         .child(preview_bundle())
-        .child(ring_bundle())
+        .child(ring_bundle());
+
+    // the overlay goes last so it is drawn over everything else
+    match overlay {
+        Some(overlay) => graph_view.child(overlay),
+        None => graph_view
+    }
 }
 
 /// Builds one tile: a rounded box with a colored title bar over its inputs and outputs, then a
