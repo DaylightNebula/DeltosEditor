@@ -1,10 +1,10 @@
-use std::{fmt::Debug, path::PathBuf, sync::{Arc, Mutex, MutexGuard}};
+use std::{fmt::Debug, path::PathBuf, sync::{Arc, Mutex}};
 
-use deltos::{editors::FileEditor, sources::{BoxFuture, Source}, theme::Theme};
-use gearbox::{glam::{Vec2, Vec4}, ui::*};
+use deltos::{editors::{FileEditor, text::OpenFile}, sources::{BoxFuture, Source}, theme::Theme};
+use gearbox::{anyhow, glam::{Vec2, Vec4}, ui::*};
 use uuid::Uuid;
 
-use crate::{GraphRoot, HoverRing, IODot, NewTileItem, SharedGraph, TileNode, WireNode, WirePreview, set_top_left, tiles::{IOButton, NodeGraphTile}};
+use crate::{GraphRoot, HoverRing, IODot, NewTileItem, PropertyField, SharedGraph, TileNode, WireNode, WirePreview, set_top_left, tiles::{IOButton, NodeGraphTile, TileProperty}};
 
 const TITLE_SIZE: f32 = 18.0;
 const IO_SIZE: f32 = 14.0;
@@ -19,9 +19,11 @@ const WIRE_SAMPLES: usize = 32;
 const WIRE_MIN_BEND: f32 = 40.0;
 pub(crate) const WIRE_HIT_DISTANCE: f32 = 6.0;
 const NEW_TILE_MENU_WIDTH: f32 = 180.0;
+const PROPERTY_FIELD_WIDTH: f32 = 90.0;
 
 /// Implemented by anything that describes a node graph for a set of file types.  Wrapped in a
-/// `NodeGraphFileEditor` so the Deltos editor can open files with it.
+/// `NodeGraphFileEditor` so the Deltos editor can open files with it.  Every opened file gets its
+/// own graph from `open`, which `save` writes back.
 pub trait NodeGraphEditor: Debug + Send + 'static {
     /// The tile implementation.
     type Tile: NodeGraphTile;
@@ -32,12 +34,33 @@ pub trait NodeGraphEditor: Debug + Send + 'static {
     /// A list of file types this editor works on.
     fn file_types(&self) -> Vec<String>;
 
+    /// Builds the graph of an opened file from its text.  Called once per opened file, so each
+    /// file is edited by its own graph.
+    ///
+    /// # Errors
+    /// * `content` isn't a graph this editor can read.
+    fn open(content: &str) -> anyhow::Result<Self> where Self: Sized;
+
+    /// Writes the graph as the text of its file, to be read back by `open`.  Called when the
+    /// file is saved.
+    ///
+    /// # Errors
+    /// * The graph can't be written, such as a graph that can't be saved in its current state.
+    fn save(&self) -> anyhow::Result<String>;
+
     /// List of options for new tiles.
     fn new_tile_options(&self) -> Vec<String>;
 
     /// Create a new tile at a given position using the given name
     /// supplied from the above new_tile_options.
     fn new_tile(&mut self, name: String, position: Vec2);
+
+    /// Removes the tile with `tile_id` from the graph.  Wires into the tile are disconnected
+    /// through `NodeGraphTile::disconnect` before this is called, and wires out of it go with it.
+    ///
+    /// # Errors
+    /// * There's no tile with `tile_id`, or it can't be removed.
+    fn remove_tile(&mut self, tile_id: Uuid) -> anyhow::Result<()>;
 
     /// The tiles of the graph to draw.
     fn tiles(&self) -> &[Self::Tile];
@@ -49,12 +72,12 @@ pub trait NodeGraphEditor: Debug + Send + 'static {
 /// Adapts a `NodeGraphEditor` into a Deltos `FileEditor` that draws its tiles.
 ///
 /// Fields:
-/// * editor: The node graph editor whose tiles are drawn, shared with the drawn tiles so dragging
-///   them can update their positions.
+/// * editor: Describes the editor's name and file types.  Opened files get their own graph from
+///   `NodeGraphEditor::open` instead of sharing this one.
 /// * font: Font used for tile titles and input/output names.
 #[derive(Debug)]
 pub struct NodeGraphFileEditor<Editor: NodeGraphEditor> {
-    editor: Arc<Mutex<Editor>>,
+    editor: Editor,
     font: Arc<SDFFont>
 }
 
@@ -62,77 +85,88 @@ impl <Editor: NodeGraphEditor> NodeGraphFileEditor<Editor> {
     /// Wraps a node graph editor so it can be added to the Deltos editor.
     ///
     /// # Parameters
-    /// * editor: The node graph editor whose tiles are drawn.
+    /// * editor: Describes the editor's name and file types.  Opened files get their own graph
+    ///   from `NodeGraphEditor::open`.
     /// * font: Font used for tile titles and input/output names.
     pub fn new(editor: Editor, font: Arc<SDFFont>) -> Self {
-        Self { editor: Arc::new(Mutex::new(editor)), font }
+        Self { editor, font }
     }
 }
 
-impl <Editor: NodeGraphEditor> NodeGraphFileEditor<Editor> {
-    /// Locks the wrapped editor, still using it if a panic poisoned the lock.
-    fn lock(&self) -> MutexGuard<'_, Editor> { crate::lock(&self.editor) }
-}
-
 impl <Editor: NodeGraphEditor> FileEditor for NodeGraphFileEditor<Editor> {
-    fn name(&self) -> String { self.lock().name() }
-    fn file_types(&self) -> Vec<String> { self.lock().file_types() }
+    fn name(&self) -> String { self.editor.name() }
+    fn file_types(&self) -> Vec<String> { self.editor.file_types() }
 
     fn build_editor(
         &mut self,
         theme: &Theme,
-        _source: Arc<dyn Source>,
-        _path: PathBuf,
-        _read_only: bool
+        source: Arc<dyn Source>,
+        path: PathBuf,
+        read_only: bool
     ) -> BoxFuture<'static, UiBundle> {
-        // build the tiles, wires and new tile menu now, since the future can't borrow the editor
-        let graph: Arc<dyn SharedGraph> = self.editor.clone();
-        let (tiles, wires, options): (Vec<UiBundle>, Vec<UiBundle>, Vec<String>) = {
-            let editor = self.lock();
-            let tiles = editor
-                .tiles()
-                .iter()
-                .map(|tile| tile_bundle(theme, &self.font, tile, Vec2::ZERO))
-                .collect();
-            let wires = wire_nodes(&*editor, theme)
-                .into_iter()
-                .map(wire_bundle)
-                .collect();
-            (tiles, wires, editor.new_tile_options())
-        };
-        let new_tile_menu = new_tile_menu(options);
-
-        let theme = *theme;
+        let (theme, font) = (*theme, self.font.clone());
         Box::pin(async move {
-            UiBundle::new(
-                Node::row()
-                    .grow(1.0)
-                    .width(Val::Percent(1.0))
-                    .min_width(px(0.0))
-                    .min_height(px(0.0))
-                    .justify(JustifyContent::Center)
-                    .align(AlignItems::Center)
-                    .gap(px(24.0))
-                    .background(theme.bg_0)
-            )
-            .with(GraphRoot { graph, pan: Vec2::ZERO })
-            .interactive()
-            .context_menu(new_tile_menu)
-            .children(wires)
-            .children(tiles)
-            .child(preview_bundle())
-            .child(ring_bundle())
+            // read the file into its own graph
+            let opened = source
+                .read_file_text_versioned(path.clone())
+                .await
+                .and_then(|(text, version)| Ok((Editor::open(&text)?, version)));
+            let (editor, version) = match opened {
+                Ok(opened) => opened,
+                Err(err) => return UiBundle::new(Node::new().padding(Rect::single(px(12.0))))
+                    .text(Text::new(font, format!("Couldn't open {}: {err:#}", path.display()), theme.red, 14.0))
+            };
+            let file = OpenFile { source: source.id(), path, dirty: false, read_only, version };
+            graph_bundle(&theme, &font, editor, file)
         })
     }
 }
 
-/// Builds one tile: a rounded box with a colored title bar over its inputs and outputs.
+/// Builds the view of an opened file's graph: its wires, tiles, and new tile menu over a pannable
+/// background that holds the graph and the file it was opened from.
+fn graph_bundle<Editor: NodeGraphEditor>(theme: &Theme, font: &Arc<SDFFont>, editor: Editor, file: OpenFile) -> UiBundle {
+    // build the tiles, wires and new tile menu before the graph is shared
+    let tiles: Vec<UiBundle> = editor
+        .tiles()
+        .iter()
+        .map(|tile| tile_bundle(theme, font, tile, Vec2::ZERO, file.read_only))
+        .collect();
+    let wires: Vec<UiBundle> = wire_nodes(&editor, theme)
+        .into_iter()
+        .map(wire_bundle)
+        .collect();
+    let new_tile_menu = new_tile_menu(editor.new_tile_options());
+    let graph: Arc<dyn SharedGraph> = Arc::new(Mutex::new(editor));
+
+    UiBundle::new(
+        Node::row()
+            .grow(1.0)
+            .width(Val::Percent(1.0))
+            .min_width(px(0.0))
+            .min_height(px(0.0))
+            .justify(JustifyContent::Center)
+            .align(AlignItems::Center)
+            .gap(px(24.0))
+            .background(theme.bg_0)
+    )
+        .with(GraphRoot { graph, pan: Vec2::ZERO })
+        .with(file)
+        .interactive()
+        .context_menu(new_tile_menu)
+        .children(wires)
+        .children(tiles)
+        .child(preview_bundle())
+        .child(ring_bundle())
+}
+
+/// Builds one tile: a rounded box with a colored title bar over its inputs and outputs, then a
+/// field for each of its properties, which can't be edited when `read_only` is set.
 ///
 /// Nodes clip their children, so the tile is a transparent wrapper half a dot wider than its box
 /// on each side.  The box is drawn behind the content, which lets the input and output dots
 /// overlap its left and right edges.  The tile is placed at its position moved by `offset`, the
 /// graph's pan.
-pub(crate) fn tile_bundle<T: NodeGraphTile>(theme: &Theme, font: &Arc<SDFFont>, tile: &T, offset: Vec2) -> UiBundle {
+pub(crate) fn tile_bundle<T: NodeGraphTile>(theme: &Theme, font: &Arc<SDFFont>, tile: &T, offset: Vec2, read_only: bool) -> UiBundle {
     let tile_id = tile.tile_id();
     let position = tile.position() + offset;
     let overhang = IO_DOT / 2.0;
@@ -181,6 +215,19 @@ pub(crate) fn tile_bundle<T: NodeGraphTile>(theme: &Theme, font: &Arc<SDFFont>, 
     .child(UiBundle::new(Node::column().gap(px(6.0)).align(AlignItems::Start)).children(inputs))
     .child(UiBundle::new(Node::column().gap(px(6.0)).align(AlignItems::End)).children(outputs));
 
+    // property fields under the inputs and outputs
+    let properties = tile
+        .properties()
+        .into_iter()
+        .map(|property| property_row(theme, font, tile_id, &property, read_only))
+        .collect::<Vec<_>>();
+    let properties = UiBundle::new(
+        Node::column()
+            .gap(px(6.0))
+            .padding(Rect::new(px(0.0), px(10.0), px(12.0), px(12.0)))
+    )
+    .children(properties);
+
     UiBundle::new(
         Node::column()
             .absolute(Rect::new_top_left(px(position.y), px(position.x)))
@@ -196,6 +243,41 @@ pub(crate) fn tile_bundle<T: NodeGraphTile>(theme: &Theme, font: &Arc<SDFFont>, 
     .child(outer_box)
     .child(title_bar)
     .child(body)
+    .child(properties)
+}
+
+/// Builds a property's row: its name then a text field holding its value.
+fn property_row(theme: &Theme, font: &Arc<SDFFont>, tile_id: Uuid, property: &TileProperty, read_only: bool) -> UiBundle {
+    let name = UiBundle::new(Node::new())
+        .text(Text::new(font.clone(), property.name(), theme.bg_8, IO_SIZE));
+    let field = UiBundle::new(
+        Node::new()
+            .width(px(PROPERTY_FIELD_WIDTH))
+            .padding(Rect::new(px(2.0), px(2.0), px(6.0), px(6.0)))
+            .background(theme.bg_0)
+            .border(1.0, theme.bg_4)
+            .radius(px(4.0))
+    )
+    .text(Text::new(font.clone(), "", theme.bg_8, IO_SIZE))
+    .with(property_input(property.value(), read_only))
+    .with(PropertyField { tile_id, name: property.name().clone() })
+    .interactive();
+
+    UiBundle::new(
+        Node::row()
+            .justify(JustifyContent::SpaceBetween)
+            .align(AlignItems::Center)
+            .gap(px(12.0))
+    )
+    .child(name)
+    .child(field)
+}
+
+/// The text input of a property field showing `value`.
+pub(crate) fn property_input(value: &str, read_only: bool) -> TextInput {
+    let mut input = TextInput::new(value);
+    input.disabled = read_only;
+    input
 }
 
 /// Builds an input row (dot then name) or, when `output` is set, an output row (name then dot).

@@ -73,7 +73,8 @@ impl NodeGraphTile for TransformTile {
     }
 }
 
-/// Demo node graph editor that shows three connectable tiles for `.graph` files.
+/// Demo node graph editor that opens every `.graph` file as three connectable tiles.  Demo graphs
+/// can't be saved.
 ///
 /// Fields:
 /// * tiles: The tiles of the graph.
@@ -89,10 +90,33 @@ impl NodeGraphEditor for DemoNodeGraphEditor {
 
     fn file_types(&self) -> Vec<String> { vec!["graph".into()] }
 
+    fn open(_content: &str) -> anyhow::Result<Self> {
+        Ok(Self {
+            tiles: vec![
+                TransformTile::new(Vec2::new(40.0, 40.0)),
+                TransformTile::new(Vec2::new(320.0, 160.0)),
+                TransformTile::new(Vec2::new(320.0, 340.0))
+            ]
+        })
+    }
+
+    fn save(&self) -> anyhow::Result<String> {
+        anyhow::bail!("Demo graphs can't be saved")
+    }
+
     fn new_tile_options(&self) -> Vec<String> { vec!["Transform".into()] }
 
     fn new_tile(&mut self, name: String, position: Vec2) {
         if name == "Transform" { self.tiles.push(TransformTile::new(position)) }
+    }
+
+    fn remove_tile(&mut self, tile_id: Uuid) -> anyhow::Result<()> {
+        let index = self.tiles
+            .iter()
+            .position(|tile| tile.tile_id == tile_id)
+            .with_context(|| format!("No tile {tile_id} in the graph"))?;
+        self.tiles.remove(index);
+        Ok(())
     }
 
     fn tiles(&self) -> &[TransformTile] { &self.tiles }
@@ -107,13 +131,7 @@ impl Plugin for DemoNodeGraphPlugin {
     fn build(self, app: App) -> App {
         app .add_plugin(DeltosNodeGraphPlugin)
             .on_startup(|mut editor: ResMut<DeltosEditor>| {
-                let demo = DemoNodeGraphEditor {
-                    tiles: vec![
-                        TransformTile::new(Vec2::new(40.0, 40.0)),
-                        TransformTile::new(Vec2::new(320.0, 160.0)),
-                        TransformTile::new(Vec2::new(320.0, 340.0))
-                    ]
-                };
+                let demo = DemoNodeGraphEditor { tiles: Vec::new() };
                 let graph_editor = NodeGraphFileEditor::new(demo, editor.font.clone());
                 editor.add_editor(Box::new(graph_editor), false);
             })
