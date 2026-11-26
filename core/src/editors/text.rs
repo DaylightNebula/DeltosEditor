@@ -32,8 +32,7 @@ pub struct SimpleTextDeltosEditorPlugin;
 impl Plugin for SimpleTextDeltosEditorPlugin {
     fn build(self, app: App) -> App {
         app .on_startup(|mut editor: ResMut<DeltosEditor>| {
-                let text_editor = SimpleTextDeltosEditor { font: editor.font.clone() };
-                editor.add_editor(Box::new(text_editor), true);
+                editor.add_editor(Box::new(SimpleTextDeltosEditor), true);
             })
             .on_render_update(mark_dirty)
             .on_render_update(save_files)
@@ -43,9 +42,7 @@ impl Plugin for SimpleTextDeltosEditorPlugin {
 /// Edits any file as plain text.
 /// (Not called `TextEditor`, because gearbox::ui already exports that name.)
 #[derive(Debug)]
-pub struct SimpleTextDeltosEditor {
-    pub font: Arc<SDFFont>,
-}
+pub struct SimpleTextDeltosEditor;
 
 impl FileEditor for SimpleTextDeltosEditor {
     fn name(&self) -> String { "Text".into() }
@@ -54,8 +51,8 @@ impl FileEditor for SimpleTextDeltosEditor {
         ["txt", "md", "toml", "json"].map(String::from).to_vec()
     }
 
-    fn build_editor(&mut self, theme: &Theme, source: Arc<dyn Source>, path: PathBuf, read_only: bool) -> BoxFuture<'static, UiBundle> {
-        let (theme, font) = (*theme, self.font.clone());
+    fn build_editor(&mut self, theme: &Theme, font: &Arc<SDFFont>, source: Arc<dyn Source>, path: PathBuf, read_only: bool) -> BoxFuture<'static, UiBundle> {
+        let (theme, font) = (*theme, font.clone());
         Box::pin(async move {
             match source.read_file_text_versioned(path.clone()).await {
                 Ok((text, version)) => {

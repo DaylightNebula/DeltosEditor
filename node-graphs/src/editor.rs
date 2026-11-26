@@ -4,7 +4,7 @@ use deltos::{editors::{FileEditor, text::OpenFile}, sources::{BoxFuture, Source}
 use gearbox::{anyhow, glam::{Vec2, Vec4}, ui::*};
 use uuid::Uuid;
 
-use crate::{DeleteTileItem, GraphRoot, HoverRing, IODot, NewTileItem, PropertyField, SharedGraph, TileNode, WireNode, WirePreview, set_top_left, tiles::{IOButton, NodeGraphTile, TileProperty}};
+use crate::{DeleteTileItem, GraphRoot, HoverRing, IODot, NewTileItem, PropertyField, SharedGraph, TileNode, WireNode, WirePreview, set_top_left, tiles::{IOButton, NodeGraphTile}};
 
 const TITLE_SIZE: f32 = 18.0;
 const IO_SIZE: f32 = 14.0;
@@ -75,16 +75,15 @@ pub trait NodeGraphEditor: Debug + Send + 'static {
     fn overlay(&self) -> Option<UiBundle> { None }
 }
 
-/// Adapts a `NodeGraphEditor` into a Deltos `FileEditor` that draws its tiles.
+/// Adapts a `NodeGraphEditor` into a Deltos `FileEditor` that draws its tiles in the
+/// `DeltosEditor`'s current theme and font.
 ///
 /// Fields:
 /// * editor: Describes the editor's name and file types.  Opened files get their own graph from
 ///   `NodeGraphEditor::open` instead of sharing this one.
-/// * font: Font used for tile titles and input/output names.
 #[derive(Debug)]
 pub struct NodeGraphFileEditor<Editor: NodeGraphEditor> {
-    editor: Editor,
-    font: Arc<SDFFont>
+    editor: Editor
 }
 
 impl <Editor: NodeGraphEditor> NodeGraphFileEditor<Editor> {
@@ -93,9 +92,8 @@ impl <Editor: NodeGraphEditor> NodeGraphFileEditor<Editor> {
     /// # Parameters
     /// * editor: Describes the editor's name and file types.  Opened files get their own graph
     ///   from `NodeGraphEditor::open`.
-    /// * font: Font used for tile titles and input/output names.
-    pub fn new(editor: Editor, font: Arc<SDFFont>) -> Self {
-        Self { editor, font }
+    pub fn new(editor: Editor) -> Self {
+        Self { editor }
     }
 }
 
@@ -106,11 +104,12 @@ impl <Editor: NodeGraphEditor> FileEditor for NodeGraphFileEditor<Editor> {
     fn build_editor(
         &mut self,
         theme: &Theme,
+        font: &Arc<SDFFont>,
         source: Arc<dyn Source>,
         path: PathBuf,
         read_only: bool
     ) -> BoxFuture<'static, UiBundle> {
-        let (theme, font) = (*theme, self.font.clone());
+        let (theme, font) = (*theme, font.clone());
         Box::pin(async move {
             // read the file into its own graph
             let opened = source
@@ -173,7 +172,7 @@ fn graph_bundle<Editor: NodeGraphEditor>(theme: &Theme, font: &Arc<SDFFont>, edi
 }
 
 /// Builds one tile: a rounded box with a colored title bar over its inputs and outputs, then a
-/// field for each of its properties, which can't be edited when `read_only` is set.
+/// body the tile defines.
 ///
 /// Nodes clip their children, so the tile is a transparent wrapper half a dot wider than its box
 /// on each side.  The box is drawn behind the content, which lets the input and output dots
@@ -228,18 +227,10 @@ pub(crate) fn tile_bundle<T: NodeGraphTile>(theme: &Theme, font: &Arc<SDFFont>, 
     .child(UiBundle::new(Node::column().gap(px(6.0)).align(AlignItems::Start)).children(inputs))
     .child(UiBundle::new(Node::column().gap(px(6.0)).align(AlignItems::End)).children(outputs));
 
-    // property fields under the inputs and outputs
-    let properties = tile
-        .properties()
-        .into_iter()
-        .map(|property| property_row(theme, font, tile_id, &property, read_only))
-        .collect::<Vec<_>>();
-    let properties = UiBundle::new(
-        Node::column()
-            .gap(px(6.0))
-            .padding(Rect::new(px(0.0), px(10.0), px(12.0), px(12.0)))
-    )
-    .children(properties);
+    // the tile's own components under the inputs and outputs
+    let extra = tile
+        .body(theme, font)
+        .map(|extra| UiBundle::new(Node::column().padding(Rect::new(px(0.0), px(10.0), px(12.0), px(12.0)))).child(extra));
 
     let tile = UiBundle::new(
         Node::column()
@@ -258,15 +249,27 @@ pub(crate) fn tile_bundle<T: NodeGraphTile>(theme: &Theme, font: &Arc<SDFFont>, 
     let tile = tile
         .child(outer_box)
         .child(title_bar)
-        .child(body)
-        .child(properties);
+        .child(body);
+    let tile = match extra {
+        Some(extra) => tile.child(extra),
+        None => tile
+    };
     if read_only { tile } else { tile.context_menu(tile_menu()) }
 }
 
-/// Builds a property's row: its name then a text field holding its value.
-fn property_row(theme: &Theme, font: &Arc<SDFFont>, tile_id: Uuid, property: &TileProperty, read_only: bool) -> UiBundle {
-    let name = UiBundle::new(Node::new())
-        .text(Text::new(font.clone(), property.name(), theme.bg_8, IO_SIZE));
+/// Builds an editable property for a tile's `NodeGraphTile::body`: its name then a text field
+/// holding its value.  When the field is submitted its text goes to `NodeGraphTile::set_property`
+/// on the tile with `tile_id`, and the tile is rebuilt.
+///
+/// # Parameters
+/// * theme: Colors of the field.
+/// * font: Font of the name and the field.
+/// * tile_id: ID of the tile the property is on, `NodeGraphTile::tile_id`.
+/// * name: Identifies the property to `set_property` and labels the field.
+/// * value: The property's current value.
+pub fn property_field(theme: &Theme, font: &Arc<SDFFont>, tile_id: Uuid, name: &str, value: &str) -> UiBundle {
+    let label = UiBundle::new(Node::new())
+        .text(Text::new(font.clone(), name, theme.bg_8, IO_SIZE));
     let field = UiBundle::new(
         Node::new()
             .width(px(PROPERTY_FIELD_WIDTH))
@@ -276,8 +279,8 @@ fn property_row(theme: &Theme, font: &Arc<SDFFont>, tile_id: Uuid, property: &Ti
             .radius(px(4.0))
     )
     .text(Text::new(font.clone(), "", theme.bg_8, IO_SIZE))
-    .with(property_input(property.value(), read_only))
-    .with(PropertyField { tile_id, name: property.name().clone() })
+    .with(TextInput::new(value))
+    .with(PropertyField { tile_id, name: name.to_string(), value: value.to_string() })
     .interactive();
 
     UiBundle::new(
@@ -286,15 +289,8 @@ fn property_row(theme: &Theme, font: &Arc<SDFFont>, tile_id: Uuid, property: &Ti
             .align(AlignItems::Center)
             .gap(px(12.0))
     )
-    .child(name)
+    .child(label)
     .child(field)
-}
-
-/// The text input of a property field showing `value`.
-pub(crate) fn property_input(value: &str, read_only: bool) -> TextInput {
-    let mut input = TextInput::new(value);
-    input.disabled = read_only;
-    input
 }
 
 /// Builds an input row (dot then name) or, when `output` is set, an output row (name then dot).

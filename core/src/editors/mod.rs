@@ -1,6 +1,6 @@
 use std::{fmt::Debug, path::PathBuf, sync::Arc};
 
-use gearbox::ui::UiBundle;
+use gearbox::ui::{SDFFont, UiBundle};
 use uuid::Uuid;
 
 use crate::{EDITOR_UUID_NAMESPACE, sources::{BoxFuture, Source}, theme::Theme};
@@ -23,5 +23,7 @@ pub trait FileEditor: Debug + Send {
     /// The future runs in the background, so it can load the file from `source`.  The
     /// `DeltosEditor` shows a placeholder until it finishes.  When `read_only` is true (the
     /// source's `Source::read_only`), the editor must not let the file be changed or saved.
-    fn build_editor(&mut self, theme: &Theme, source: Arc<dyn Source>, path: PathBuf, read_only: bool) -> BoxFuture<'static, UiBundle>;
+    /// `theme` and `font` are the `DeltosEditor`'s current ones, so every editor matches the rest
+    /// of the window.
+    fn build_editor(&mut self, theme: &Theme, font: &Arc<SDFFont>, source: Arc<dyn Source>, path: PathBuf, read_only: bool) -> BoxFuture<'static, UiBundle>;
 }

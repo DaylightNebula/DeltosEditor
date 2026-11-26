@@ -1,8 +1,8 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, sync::Arc};
 
 use deltos::theme::Theme;
 use derive_more::{Deref, DerefMut};
-use gearbox::{anyhow, glam::{Vec2, Vec4}};
+use gearbox::{anyhow, glam::{Vec2, Vec4}, ui::{SDFFont, UiBundle}};
 use getset::{CopyGetters, Getters};
 use uuid::Uuid;
 
@@ -51,12 +51,18 @@ pub trait NodeGraphTile: Debug + Send {
     /// Outputs shown on the right side of the tile.
     fn outputs(&self, theme: &Theme) -> Vec<(IOButton, Wires)>;
 
-    /// Settings shown as text fields under the tile's inputs and outputs.  None by default.
-    fn properties(&self) -> Vec<TileProperty> { Vec::new() }
+    /// Extra components shown under the tile's inputs and outputs, or `None` for none, the
+    /// default.  Build editable parameters with `editor::property_field`, whose submitted text
+    /// is passed to `set_property`.  The whole tile is rebuilt, calling this again, after each
+    /// `set_property`.
+    fn body(&self, theme: &Theme, font: &Arc<SDFFont>) -> Option<UiBundle> {
+        let _ = (theme, font);
+        None
+    }
 
-    /// Sets the property named `name` from the text typed into its field.  Called when the field
-    /// is submitted with Enter or by clicking elsewhere, after which the field shows the
-    /// property's value from `properties` again.
+    /// Sets the property named `name` from the text typed into its `editor::property_field`.
+    /// Called when the field is submitted with Enter or by clicking elsewhere, after which the
+    /// tile is rebuilt from `body`, so a refused value goes back to the last good one.
     ///
     /// # Errors
     /// * The tile has no property named `name`, the default.
@@ -64,31 +70,6 @@ pub trait NodeGraphTile: Debug + Send {
     fn set_property(&mut self, name: &str, value: &str) -> anyhow::Result<()> {
         let _ = value;
         anyhow::bail!("{} has no property {name}", self.title())
-    }
-}
-
-/// A setting of a tile, edited through a text field on the tile.
-///
-/// Fields:
-/// * name: Identifies the property to `NodeGraphTile::set_property` and labels its field.  It
-///   must stay the same every time the tile lists its properties.
-/// * value: The property's current value, as shown in its field.
-#[derive(Clone, Debug, PartialEq, Eq, Getters)]
-pub struct TileProperty {
-    #[getset(get = "pub")]
-    name: String,
-    #[getset(get = "pub")]
-    value: String
-}
-
-impl TileProperty {
-    /// Creates a property shown with its current value.
-    ///
-    /// # Parameters
-    /// * name: Identifies the property and labels its field.
-    /// * value: The property's current value.
-    pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
-        Self { name: name.into(), value: value.into() }
     }
 }
 

@@ -138,8 +138,7 @@ impl Plugin for DemoNodeGraphPlugin {
     fn build(self, app: App) -> App {
         app .add_plugin(DeltosNodeGraphPlugin)
             .on_startup(|mut editor: ResMut<DeltosEditor>| {
-                let demo = DemoNodeGraphEditor { tiles: Vec::new() };
-                let graph_editor = NodeGraphFileEditor::new(demo, editor.font.clone());
+                let graph_editor = NodeGraphFileEditor::new(DemoNodeGraphEditor { tiles: Vec::new() });
                 editor.add_editor(Box::new(graph_editor), false);
             })
     }

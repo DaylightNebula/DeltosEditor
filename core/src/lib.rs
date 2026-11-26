@@ -587,7 +587,7 @@ impl DeltosEditor {
         let editor = self.editors.get_mut(editor_id)?;
         let source = self.sources.get(&tab.source)?.clone();
         let read_only = source.read_only();
-        let build = editor.build_editor(&self.theme, source, tab.path.clone(), read_only);
+        let build = editor.build_editor(&self.theme, &self.font, source, tab.path.clone(), read_only);
 
         // swap the built editor in for the placeholder once it is ready
         let (tab_id, placeholder) = (tab.id, reserve_id());

@@ -2,11 +2,11 @@ use std::{collections::{HashMap, HashSet}, fmt::Debug, sync::{Arc, Mutex, MutexG
 
 use anarchy::{Component, ComponentMeta, EntityID, Event, Query, Res, ResMut, Resource, World};
 use deltos::{DeltosEditor, editors::text::{OpenFile, save_target}, notify::NotifyLevel, sources::{TaskResult, is_conflict}, theme::Theme};
-use gearbox::{Plugin, anyhow::{self, Context}, glam::{Vec2, Vec4}, ui::{Activate, ComputedNode, ContextMenu, Display, EntityUiElements, Node, PositionType, Rect, SDFFont, Submit, TextInput, UiBundle, UiFocus, UiInput, Val, px}};
+use gearbox::{Plugin, anyhow::{self, Context}, glam::{Vec2, Vec4}, ui::{Activate, ComputedNode, ContextMenu, Display, EntityUiElements, Node, PositionType, Rect, SDFFont, Submit, UiBundle, UiFocus, UiInput, Val, px}};
 use uuid::Uuid;
 use winit::keyboard::{Key, NamedKey};
 
-use crate::{editor::NodeGraphEditor, tiles::{NodeGraphTile, TileProperty, WireRules}};
+use crate::{editor::NodeGraphEditor, tiles::{NodeGraphTile, WireRules}};
 
 pub mod editor;
 pub mod tiles;
@@ -74,9 +74,9 @@ pub trait SharedGraph: Debug + Send + Sync {
     /// * The tile refuses the value.
     fn set_property(&self, tile_id: Uuid, name: &str, value: &str) -> anyhow::Result<()>;
 
-    /// The properties of the tile with `tile_id`, empty if there's no such tile.  Used by
-    /// `edit_properties` to show a property's value after its field is submitted.
-    fn properties(&self, tile_id: Uuid) -> Vec<TileProperty>;
+    /// Builds the tile with `tile_id` again, placed moved by `offset`, the graph's pan, or `None`
+    /// if there's no such tile.  Used by `edit_properties` to redraw a tile after a property is set.
+    fn refresh_tile(&self, tile_id: Uuid, offset: Vec2, theme: &Theme, font: &Arc<SDFFont>) -> Option<UiBundle>;
 
     /// Calls `NodeGraphEditor::save`.  Used by `save_graphs`.
     ///
@@ -161,13 +161,12 @@ impl<Editor: NodeGraphEditor> SharedGraph for Mutex<Editor> {
             .set_property(name, value)
     }
 
-    fn properties(&self, tile_id: Uuid) -> Vec<TileProperty> {
+    fn refresh_tile(&self, tile_id: Uuid, offset: Vec2, theme: &Theme, font: &Arc<SDFFont>) -> Option<UiBundle> {
         lock(self)
             .tiles()
             .iter()
             .find(|tile| tile.tile_id() == tile_id)
-            .map(NodeGraphTile::properties)
-            .unwrap_or_default()
+            .map(|tile| editor::tile_bundle(theme, font, tile, offset, false))
     }
 
     fn save(&self) -> anyhow::Result<String> { lock(self).save() }
@@ -260,11 +259,13 @@ pub struct WireNode {
 ///
 /// Fields:
 /// * tile_id: ID of the tile the property is on.
-/// * name: `TileProperty::name` of the property, which identifies it.
+/// * name: Identifies the property to `NodeGraphTile::set_property`.
+/// * value: The property's value when the field was built, so an unchanged field isn't set.
 #[derive(Debug, Clone, Component)]
 pub struct PropertyField {
     pub tile_id: Uuid,
-    pub name: String
+    pub name: String,
+    pub value: String
 }
 
 /// Marks the ring shown around the hovered dot of a graph.
@@ -635,39 +636,45 @@ fn delete_tile(world: &World, theme: &Theme, root: EntityID, tile_id: Uuid) {
     mark_dirty(world, root);
 }
 
-/// Applies a property field's text to its tile when the field is submitted, then shows the
-/// property's value in the field again, so a refused value goes back to the last good one.
+/// Applies a property field's text to its tile when the field is submitted, then redraws the
+/// whole tile in every view of the graph, so a refused value goes back to the last good one.
 fn edit_properties(world: World, submitted: Event<Submit>, mut editor: ResMut<DeltosEditor>) {
     for Submit { entity, text } in submitted.read() {
         let Some(field) = component::<PropertyField>(&world, entity) else { continue };
         let Some(root) = root_of(&world, entity) else { continue };
         let Some(GraphRoot { graph, .. }) = component::<GraphRoot>(&world, root) else { continue };
-        if !editable(&world, root) { continue }
+        if !editable(&world, root) || field.value == text { continue }
 
         // set the property, warning when the tile refuses it
-        let current = graph
-            .properties(field.tile_id)
-            .into_iter()
-            .find(|property| *property.name() == field.name)
-            .map(|property| property.value().clone());
-        if current.as_ref() != Some(&text) {
-            match graph.set_property(field.tile_id, &field.name, &text) {
-                Ok(()) => mark_dirty(&world, root),
-                Err(err) => editor.notify(NotifyLevel::Warning, format!("Couldn't set {}: {err:#}", field.name))
-            }
+        match graph.set_property(field.tile_id, &field.name, &text) {
+            Ok(()) => mark_dirty(&world, root),
+            Err(err) => editor.notify(NotifyLevel::Warning, format!("Couldn't set {}: {err:#}", field.name))
         }
+        refresh_tile(&world, &editor.theme, &editor.font, &graph, field.tile_id);
+    }
+}
 
-        // show the property's value as the tile now has it
-        let shown = graph
-            .properties(field.tile_id)
+/// Redraws the tile with `tile_id` in every view of `graph`, each at its own pan, then the wires,
+/// since the tile's dots are new.
+fn refresh_tile(world: &World, theme: &Theme, font: &Arc<SDFFont>, graph: &Arc<dyn SharedGraph>, tile_id: Uuid) {
+    let views: Vec<(EntityID, Vec2)> = Query::<&GraphRoot>::new(world)
+        .iter()
+        .filter(|(_, root)| Arc::ptr_eq(&root.graph, graph))
+        .map(|(id, root)| (id, root.pan))
+        .collect();
+    for (root, pan) in views {
+        // remove the old tile, then add it again built from the graph's current state
+        let old: Vec<EntityID> = children_with::<TileNode>(world)
             .into_iter()
-            .find(|property| *property.name() == field.name);
-        if let Some(shown) = shown
-            && shown.value() != &text
-            && let Ok(Some(mut input)) = world.handle(entity).get::<&mut TextInput>() {
-            *input = editor::property_input(shown.value(), input.disabled);
+            .filter(|(id, parent)| *parent == root && component::<TileNode>(world, *id).is_some_and(|tile| tile.tile_id == tile_id))
+            .map(|(id, _)| id)
+            .collect();
+        for id in old { world.handle(id).despawn_recursive(); }
+        if let Some(tile) = graph.refresh_tile(tile_id, pan, theme, font) {
+            world.spawn_with_parent(Some(root), tile.into_entity_builder());
         }
     }
+    respawn_wires(world, theme, graph);
 }
 
 /// Writes every dirty, writable graph back to its file in the background when save is pressed.
@@ -980,8 +987,6 @@ mod tests {
             vec![(IOButton::new(OUTPUT, "Out", theme.purple, WireRules::Multi), Wires::new(self.wires.clone()))]
         }
 
-        fn properties(&self) -> Vec<TileProperty> { vec![TileProperty::new("size", self.size.to_string())] }
-
         fn set_property(&mut self, name: &str, value: &str) -> anyhow::Result<()> {
             anyhow::ensure!(name == "size", "No property {name}");
             self.size = value.parse()?;
@@ -1090,14 +1095,23 @@ mod tests {
         Ok(())
     }
 
+    /// The `size` of the tile with `tile_id`, or `None` if the graph has no such tile.
+    fn size_of(graph: &Mutex<TestGraph>, tile_id: Uuid) -> Option<u32> {
+        lock(graph)
+            .tiles()
+            .iter()
+            .find(|tile| tile.tile_id == tile_id)
+            .map(|tile| tile.size)
+    }
+
     #[test]
     fn properties_are_set_on_the_right_tile() -> anyhow::Result<()> {
         let (graph, [first, middle, _]) = wired_graph()?;
 
         graph.set_property(middle, "size", "7")?;
 
-        assert_eq!(graph.properties(middle), [TileProperty::new("size", "7")]);
-        assert_eq!(graph.properties(first), [TileProperty::new("size", "1")]);
+        assert_eq!(size_of(&graph, middle), Some(7));
+        assert_eq!(size_of(&graph, first), Some(1));
         Ok(())
     }
 
@@ -1109,8 +1123,8 @@ mod tests {
         assert!(graph.set_property(first, "missing", "2").is_err());
         assert!(graph.set_property(Uuid::new_v4(), "size", "2").is_err());
 
-        assert_eq!(graph.properties(first), [TileProperty::new("size", "1")]);
-        assert!(graph.properties(Uuid::new_v4()).is_empty());
+        assert_eq!(size_of(&graph, first), Some(1));
+        assert_eq!(size_of(&graph, Uuid::new_v4()), None);
         Ok(())
     }
 
