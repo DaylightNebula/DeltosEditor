@@ -110,7 +110,7 @@ fn mark_dirty(world: World, changed: Event<ValueChange<String>>) {
 ///
 /// # Errors
 /// * The file's source isn't in the editor anymore.
-pub(crate) fn save_target(editor: &DeltosEditor, file: &OpenFile) -> anyhow::Result<Option<Arc<dyn Source>>> {
+pub fn save_target(editor: &DeltosEditor, file: &OpenFile) -> anyhow::Result<Option<Arc<dyn Source>>> {
     if !file.dirty || file.read_only { return Ok(None) }
     let source = editor.sources
         .get(&file.source)
