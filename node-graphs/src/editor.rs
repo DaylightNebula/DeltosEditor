@@ -4,7 +4,7 @@ use deltos::{editors::{FileEditor, text::OpenFile}, sources::{BoxFuture, Source}
 use gearbox::{anyhow, glam::{Vec2, Vec4}, ui::*};
 use uuid::Uuid;
 
-use crate::{GraphRoot, HoverRing, IODot, NewTileItem, PropertyField, SharedGraph, TileNode, WireNode, WirePreview, set_top_left, tiles::{IOButton, NodeGraphTile, TileProperty}};
+use crate::{DeleteTileItem, GraphRoot, HoverRing, IODot, NewTileItem, PropertyField, SharedGraph, TileNode, WireNode, WirePreview, set_top_left, tiles::{IOButton, NodeGraphTile, TileProperty}};
 
 const TITLE_SIZE: f32 = 18.0;
 const IO_SIZE: f32 = 14.0;
@@ -19,6 +19,7 @@ const WIRE_SAMPLES: usize = 32;
 const WIRE_MIN_BEND: f32 = 40.0;
 pub(crate) const WIRE_HIT_DISTANCE: f32 = 6.0;
 const NEW_TILE_MENU_WIDTH: f32 = 180.0;
+const TILE_MENU_WIDTH: f32 = 140.0;
 const PROPERTY_FIELD_WIDTH: f32 = 90.0;
 
 /// Implemented by anything that describes a node graph for a set of file types.  Wrapped in a
@@ -228,7 +229,7 @@ pub(crate) fn tile_bundle<T: NodeGraphTile>(theme: &Theme, font: &Arc<SDFFont>, 
     )
     .children(properties);
 
-    UiBundle::new(
+    let tile = UiBundle::new(
         Node::column()
             .absolute(Rect::new_top_left(px(position.y), px(position.x)))
             .padding(Rect::new(
@@ -239,11 +240,15 @@ pub(crate) fn tile_bundle<T: NodeGraphTile>(theme: &Theme, font: &Arc<SDFFont>, 
             ))
     )
     .with(TileNode { tile_id })
-    .interactive()
-    .child(outer_box)
-    .child(title_bar)
-    .child(body)
-    .child(properties)
+    .interactive();
+
+    // tiles of a read only graph can't be deleted, so they get no menu
+    let tile = tile
+        .child(outer_box)
+        .child(title_bar)
+        .child(body)
+        .child(properties);
+    if read_only { tile } else { tile.context_menu(tile_menu()) }
 }
 
 /// Builds a property's row: its name then a text field holding its value.
@@ -316,6 +321,12 @@ pub(crate) fn wire_nodes<Editor: NodeGraphEditor>(editor: &Editor, theme: &Theme
         }
     }
     nodes
+}
+
+/// Builds the menu shown when a tile is right clicked, which only has a "Delete" item for now.
+fn tile_menu() -> UiBundle {
+    let delete = themed::menu_item("Delete").with(DeleteTileItem);
+    themed::menu(TILE_MENU_WIDTH, [delete])
 }
 
 /// Builds the menu of new tiles shown when a graph's background is right clicked, one item per

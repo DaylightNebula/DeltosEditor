@@ -29,6 +29,7 @@ impl Plugin for DeltosNodeGraphPlugin {
             .on_render_update(pan_graphs)
             .on_render_update(add_tiles)
             .on_render_update(delete_tiles)
+            .on_render_update(delete_tile_from_menu)
             .on_render_update(edit_properties)
             .on_render_update(save_graphs)
             .on_render_update(draw_wires)
@@ -199,6 +200,11 @@ pub struct GraphRoot {
 pub struct NewTileItem {
     pub name: String
 }
+
+/// Marks the "Delete" item of a tile's right click menu.  The menu is a child of the tile it
+/// deletes.
+#[derive(Debug, Clone, Copy, Component)]
+pub struct DeleteTileItem;
 
 /// Marks the root UI node of a drawn tile so `drag_tiles` can move it.
 ///
@@ -585,25 +591,48 @@ fn delete_tiles(world: World, input: Res<UiInput>, focus: Res<UiFocus>, editor: 
         .find_map(|id| component::<TileNode>(&world, id));
     let Some(TileNode { tile_id }) = tile else { return };
     let Some(root) = root_of(&world, hovered) else { return };
-    let Some(GraphRoot { graph, .. }) = component::<GraphRoot>(&world, root) else { return };
-    if !editable(&world, root) { return }
+    delete_tile(&world, &editor.theme, root, tile_id);
+}
+
+/// Deletes a tile when "Delete" is chosen in its right click menu, the same as pressing Delete
+/// over it.
+fn delete_tile_from_menu(world: World, activated: Event<Activate>, editor: Res<DeltosEditor>) {
+    for Activate { entity } in activated.read() {
+        if !has::<DeleteTileItem>(&world, entity) { continue }
+
+        // the menu is a child of the tile it deletes
+        let tile = world
+            .hierarchy()
+            .ancestors(entity)
+            .find_map(|id| component::<TileNode>(&world, id));
+        let Some(TileNode { tile_id }) = tile else { continue };
+        let Some(root) = root_of(&world, entity) else { continue };
+        delete_tile(&world, &editor.theme, root, tile_id);
+    }
+}
+
+/// Removes the tile with `tile_id` from the graph drawn by `root`, then from every view of the
+/// graph, along with every wire into or out of it.  Does nothing if the graph is read only.
+fn delete_tile(world: &World, theme: &Theme, root: EntityID, tile_id: Uuid) {
+    let Some(GraphRoot { graph, .. }) = component::<GraphRoot>(world, root) else { return };
+    if !editable(world, root) { return }
 
     // remove it from the graph, then from every view of the graph, and redraw the wires
-    let result = graph.remove_tile(tile_id, &editor.theme);
+    let result = graph.remove_tile(tile_id, theme);
     if let Err(err) = &result {
         eprintln!("Failed to delete tile {tile_id}: {err:#}");
     }
     if result.is_ok() {
-        let views: Vec<EntityID> = children_with::<TileNode>(&world)
+        let views: Vec<EntityID> = children_with::<TileNode>(world)
             .into_iter()
-            .filter(|(id, _)| component::<TileNode>(&world, *id).is_some_and(|tile| tile.tile_id == tile_id))
-            .filter(|(_, parent)| component::<GraphRoot>(&world, *parent).is_some_and(|other| Arc::ptr_eq(&other.graph, &graph)))
+            .filter(|(id, _)| component::<TileNode>(world, *id).is_some_and(|tile| tile.tile_id == tile_id))
+            .filter(|(_, parent)| component::<GraphRoot>(world, *parent).is_some_and(|other| Arc::ptr_eq(&other.graph, &graph)))
             .map(|(id, _)| id)
             .collect();
         for id in views { world.handle(id).despawn_recursive(); }
     }
-    respawn_wires(&world, &editor.theme, &graph);
-    mark_dirty(&world, root);
+    respawn_wires(world, theme, &graph);
+    mark_dirty(world, root);
 }
 
 /// Applies a property field's text to its tile when the field is submitted, then shows the
