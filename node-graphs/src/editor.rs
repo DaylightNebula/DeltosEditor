@@ -3,7 +3,7 @@ use std::{fmt::Debug, path::PathBuf, sync::{Arc, Mutex, PoisonError}};
 use deltos::{editors::FileEditor, sources::{BoxFuture, Source}, theme::Theme};
 use gearbox::ui::*;
 
-use crate::{IOButton, NodeGraphTile, TileNode, TilePositions};
+use crate::{TileNode, TilePositions, tiles::{IOButton, NodeGraphTile}};
 
 const TITLE_SIZE: f32 = 18.0;
 const IO_SIZE: f32 = 14.0;

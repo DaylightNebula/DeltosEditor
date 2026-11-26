@@ -1,5 +1,5 @@
 use deltos::{DeltosEditor, DeltosPlugin, editors::text::SimpleTextDeltosEditorPlugin, theme::Theme};
-use deltos_node_graphs::{DeltosNodeGraphPlugin, IOButton, NodeGraphTile, editor::{NodeGraphEditor, NodeGraphFileEditor}};
+use deltos_node_graphs::{DeltosNodeGraphPlugin, editor::{NodeGraphEditor, NodeGraphFileEditor}, tiles::{IOButton, NodeGraphTile}};
 use gearbox::{App, Plugin, anarchy::ResMut, anyhow, glam::{Vec2, Vec4}};
 use uuid::Uuid;
 
