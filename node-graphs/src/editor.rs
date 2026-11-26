@@ -4,7 +4,7 @@ use deltos::{editors::FileEditor, sources::{BoxFuture, Source}, theme::Theme};
 use gearbox::{glam::{Vec2, Vec4}, ui::*};
 use uuid::Uuid;
 
-use crate::{GraphRoot, HoverRing, IODot, SharedGraph, TileNode, WireNode, WirePreview, set_top_left, tiles::{IOButton, NodeGraphTile}};
+use crate::{GraphRoot, HoverRing, IODot, NewTileItem, SharedGraph, TileNode, WireNode, WirePreview, set_top_left, tiles::{IOButton, NodeGraphTile}};
 
 const TITLE_SIZE: f32 = 18.0;
 const IO_SIZE: f32 = 14.0;
@@ -18,6 +18,7 @@ pub(crate) const WIRE_HOVER_THICKNESS: f32 = 4.5;
 const WIRE_SAMPLES: usize = 32;
 const WIRE_MIN_BEND: f32 = 40.0;
 pub(crate) const WIRE_HIT_DISTANCE: f32 = 6.0;
+const NEW_TILE_MENU_WIDTH: f32 = 180.0;
 
 /// Implemented by anything that describes a node graph for a set of file types.  Wrapped in a
 /// `NodeGraphFileEditor` so the Deltos editor can open files with it.
@@ -30,6 +31,13 @@ pub trait NodeGraphEditor: Debug + Send + 'static {
 
     /// A list of file types this editor works on.
     fn file_types(&self) -> Vec<String>;
+
+    /// List of options for new tiles.
+    fn new_tile_options(&self) -> Vec<String>;
+
+    /// Create a new tile at a given position using the given name
+    /// supplied from the above new_tile_options.
+    fn new_tile(&mut self, name: String, position: Vec2);
 
     /// The tiles of the graph to draw.
     fn tiles(&self) -> &[Self::Tile];
@@ -77,21 +85,22 @@ impl <Editor: NodeGraphEditor> FileEditor for NodeGraphFileEditor<Editor> {
         _path: PathBuf,
         _read_only: bool
     ) -> BoxFuture<'static, UiBundle> {
-        // build the tiles and wires now, since the future can't borrow the editor
+        // build the tiles, wires and new tile menu now, since the future can't borrow the editor
         let graph: Arc<dyn SharedGraph> = self.editor.clone();
-        let (tiles, wires): (Vec<UiBundle>, Vec<UiBundle>) = {
+        let (tiles, wires, options): (Vec<UiBundle>, Vec<UiBundle>, Vec<String>) = {
             let editor = self.lock();
             let tiles = editor
                 .tiles()
                 .iter()
-                .map(|tile| tile_bundle(theme, &self.font, tile))
+                .map(|tile| tile_bundle(theme, &self.font, tile, Vec2::ZERO))
                 .collect();
             let wires = wire_nodes(&*editor, theme)
                 .into_iter()
                 .map(wire_bundle)
                 .collect();
-            (tiles, wires)
+            (tiles, wires, editor.new_tile_options())
         };
+        let new_tile_menu = new_tile_menu(options);
 
         let theme = *theme;
         Box::pin(async move {
@@ -106,7 +115,9 @@ impl <Editor: NodeGraphEditor> FileEditor for NodeGraphFileEditor<Editor> {
                     .gap(px(24.0))
                     .background(theme.bg_0)
             )
-            .with(GraphRoot { graph })
+            .with(GraphRoot { graph, pan: Vec2::ZERO })
+            .interactive()
+            .context_menu(new_tile_menu)
             .children(wires)
             .children(tiles)
             .child(preview_bundle())
@@ -119,9 +130,11 @@ impl <Editor: NodeGraphEditor> FileEditor for NodeGraphFileEditor<Editor> {
 ///
 /// Nodes clip their children, so the tile is a transparent wrapper half a dot wider than its box
 /// on each side.  The box is drawn behind the content, which lets the input and output dots
-/// overlap its left and right edges.
-fn tile_bundle<T: NodeGraphTile>(theme: &Theme, font: &Arc<SDFFont>, tile: &T) -> UiBundle {
-    let (tile_id, position) = (tile.tile_id(), tile.position());
+/// overlap its left and right edges.  The tile is placed at its position moved by `offset`, the
+/// graph's pan.
+pub(crate) fn tile_bundle<T: NodeGraphTile>(theme: &Theme, font: &Arc<SDFFont>, tile: &T, offset: Vec2) -> UiBundle {
+    let tile_id = tile.tile_id();
+    let position = tile.position() + offset;
     let overhang = IO_DOT / 2.0;
     let inner_radius = TILE_RADIUS - TILE_BORDER;
 
@@ -221,6 +234,15 @@ pub(crate) fn wire_nodes<Editor: NodeGraphEditor>(editor: &Editor, theme: &Theme
         }
     }
     nodes
+}
+
+/// Builds the menu of new tiles shown when a graph's background is right clicked, one item per
+/// option from `NodeGraphEditor::new_tile_options`.
+fn new_tile_menu(options: Vec<String>) -> UiBundle {
+    let items = options
+        .into_iter()
+        .map(|name| themed::menu_item(name.clone()).with(NewTileItem { name }));
+    themed::menu(NEW_TILE_MENU_WIDTH, items)
 }
 
 /// Builds a hidden wire, drawn behind the tiles once `draw_wires` finds both of its dots.

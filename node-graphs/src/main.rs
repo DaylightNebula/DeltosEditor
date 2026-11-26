@@ -89,6 +89,12 @@ impl NodeGraphEditor for DemoNodeGraphEditor {
 
     fn file_types(&self) -> Vec<String> { vec!["graph".into()] }
 
+    fn new_tile_options(&self) -> Vec<String> { vec!["Transform".into()] }
+
+    fn new_tile(&mut self, name: String, position: Vec2) {
+        if name == "Transform" { self.tiles.push(TransformTile::new(position)) }
+    }
+
     fn tiles(&self) -> &[TransformTile] { &self.tiles }
 
     fn tiles_mut(&mut self) -> &mut [TransformTile] { &mut self.tiles }

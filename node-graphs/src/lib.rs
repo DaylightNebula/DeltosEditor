@@ -1,8 +1,8 @@
-use std::{collections::HashMap, fmt::Debug, sync::{Arc, Mutex, MutexGuard, PoisonError}};
+use std::{collections::{HashMap, HashSet}, fmt::Debug, sync::{Arc, Mutex, MutexGuard, PoisonError}};
 
-use anarchy::{Component, ComponentMeta, EntityID, Query, Res, ResMut, Resource, World};
+use anarchy::{Component, ComponentMeta, EntityID, Event, Query, Res, ResMut, Resource, World};
 use deltos::{DeltosEditor, theme::Theme};
-use gearbox::{Plugin, anyhow::{self, Context}, glam::{Vec2, Vec4}, ui::{ComputedNode, Display, EntityUiElements, Node, PositionType, Rect, UiInput, px}};
+use gearbox::{Plugin, anyhow::{self, Context}, glam::{Vec2, Vec4}, ui::{Activate, ComputedNode, ContextMenu, Display, EntityUiElements, Node, PositionType, Rect, SDFFont, UiBundle, UiInput, Val, px}};
 use uuid::Uuid;
 
 use crate::{editor::NodeGraphEditor, tiles::{NodeGraphTile, WireRules}};
@@ -11,17 +11,21 @@ pub mod editor;
 pub mod tiles;
 
 /// Adds the systems that drag tiles, highlight hovered input and output dots, connect dots with
-/// wires, and disconnect wires.
+/// wires, disconnect wires, pan graphs, and add tiles from a graph's right click menu.
 pub struct DeltosNodeGraphPlugin;
 impl Plugin for DeltosNodeGraphPlugin {
     fn build(self, app: gearbox::App) -> gearbox::App {
         app
             .add_resource(TileDrag::default())
             .add_resource(PendingWire::default())
+            .add_resource(GraphPan::default())
+            .add_resource(NewTileMenu::default())
             .on_render_update(drag_tiles)
             .on_render_update(hover_rings)
             .on_render_update(connect_wires)
             .on_render_update(disconnect_wires)
+            .on_render_update(pan_graphs)
+            .on_render_update(add_tiles)
             .on_render_update(draw_wires)
     }
 }
@@ -43,6 +47,10 @@ pub trait SharedGraph: Debug + Send + Sync {
 
     /// The wires out of every tile's outputs, drawn by `draw_wires`.
     fn wires(&self, theme: &Theme) -> Vec<WireNode>;
+
+    /// Calls `NodeGraphEditor::new_tile` and builds the tiles it added, placed moved by `offset`,
+    /// the graph's pan.  Used by `add_tiles` when a new tile is chosen.
+    fn add_tile(&self, name: String, position: Vec2, offset: Vec2, theme: &Theme, font: &Arc<SDFFont>) -> Vec<UiBundle>;
 }
 
 impl<Editor: NodeGraphEditor> SharedGraph for Mutex<Editor> {
@@ -74,6 +82,24 @@ impl<Editor: NodeGraphEditor> SharedGraph for Mutex<Editor> {
     }
 
     fn wires(&self, theme: &Theme) -> Vec<WireNode> { editor::wire_nodes(&*lock(self), theme) }
+
+    fn add_tile(&self, name: String, position: Vec2, offset: Vec2, theme: &Theme, font: &Arc<SDFFont>) -> Vec<UiBundle> {
+        let mut editor = lock(self);
+        let before: HashSet<Uuid> = editor
+            .tiles()
+            .iter()
+            .map(|tile| tile.tile_id())
+            .collect();
+        editor.new_tile(name, position);
+
+        // build only the tiles that weren't there before
+        editor
+            .tiles()
+            .iter()
+            .filter(|tile| !before.contains(&tile.tile_id()))
+            .map(|tile| editor::tile_bundle(theme, font, tile, offset))
+            .collect()
+    }
 }
 
 /// Locks a shared editor, still using it if a panic poisoned the lock.
@@ -87,9 +113,21 @@ pub(crate) fn lock<Editor>(editor: &Mutex<Editor>) -> MutexGuard<'_, Editor> {
 ///
 /// Fields:
 /// * graph: The graph this node draws.
+/// * pan: How far the graph's background was dragged, in logical pixels.  Tiles are drawn moved
+///   by it, and positions given to the graph have it taken away.
 #[derive(Debug, Clone, Component)]
 pub struct GraphRoot {
-    pub graph: Arc<dyn SharedGraph>
+    pub graph: Arc<dyn SharedGraph>,
+    pub pan: Vec2
+}
+
+/// Marks an item of a graph's new tile menu.
+///
+/// Fields:
+/// * name: The option from `NodeGraphEditor::new_tile_options` the item adds.
+#[derive(Debug, Clone, Component)]
+pub struct NewTileItem {
+    pub name: String
 }
 
 /// Marks the root UI node of a drawn tile so `drag_tiles` can move it.
@@ -170,6 +208,20 @@ pub struct HeldTile {
 #[derive(Debug, Default, Resource)]
 pub struct TileDrag(pub Option<HeldTile>);
 
+/// The graph whose background is being dragged, if any.
+///
+/// Fields:
+/// * 0: The dragged `GraphRoot` node, `None` while no background is pressed.
+#[derive(Debug, Default, Resource)]
+pub struct GraphPan(pub Option<EntityID>);
+
+/// Where the new tile menu was last opened, which is where a chosen tile is added.
+///
+/// Fields:
+/// * 0: Where the background was right clicked, in window pixels.
+#[derive(Debug, Default, Resource)]
+pub struct NewTileMenu(pub Option<Vec2>);
+
 /// The dot a wire was started from, if any.
 ///
 /// Fields:
@@ -193,7 +245,7 @@ fn drag_tiles(world: World, input: Res<UiInput>, mut drag: ResMut<TileDrag>) {
         let tile = component::<TileNode>(&world, held.entity);
         let root = root_of(&world, held.entity).and_then(|root| component::<GraphRoot>(&world, root));
         if let (Some(tile), Some(root), Some(offset)) = (tile, root, held.offset) {
-            root.graph.set_tile_position(tile.tile_id, offset);
+            root.graph.set_tile_position(tile.tile_id, offset - root.pan);
         }
         return;
     }
@@ -269,7 +321,7 @@ fn finish_wire(world: &World, theme: &Theme, a: EntityID, b: EntityID) -> bool {
     let (Some(dot_a), Some(dot_b)) = (component::<IODot>(world, a), component::<IODot>(world, b)) else { return false };
     let Some(root) = root_of(world, a) else { return false };
     if dot_a.output == dot_b.output || root_of(world, b) != Some(root) { return false }
-    let Some(GraphRoot { graph }) = component::<GraphRoot>(world, root) else { return false };
+    let Some(GraphRoot { graph, .. }) = component::<GraphRoot>(world, root) else { return false };
 
     // skip wires that exist already
     let (output, input) = if dot_a.output { (dot_a, dot_b) } else { (dot_b, dot_a) };
@@ -316,7 +368,7 @@ fn disconnect_wires(world: World, input: Res<UiInput>, layout: Res<EntityUiEleme
     let Some(id) = wire_under_pointer(&world, &input, &layout) else { return };
     let Some(wire) = component::<WireNode>(&world, id) else { return };
     let Some(root) = world.hierarchy().parent(id) else { return };
-    let Some(GraphRoot { graph }) = component::<GraphRoot>(&world, root) else { return };
+    let Some(GraphRoot { graph, .. }) = component::<GraphRoot>(&world, root) else { return };
 
     // disconnect it and redraw the graph's wires
     if let Err(err) = graph.disconnect(wire.output_tile, wire.output_button, wire.input_tile, wire.input_button) {
@@ -330,7 +382,7 @@ fn disconnect_wires(world: World, input: Res<UiInput>, layout: Res<EntityUiEleme
 /// under the pointer.  Wires are drawn behind the tiles, so there's none while the pointer is over
 /// a tile or dot.
 fn wire_under_pointer(world: &World, input: &UiInput, layout: &EntityUiElements) -> Option<EntityID> {
-    if input.hovered.is_some() { return None }
+    if input.hovered.is_some_and(|id| !has::<GraphRoot>(world, id)) { return None }
     let scale = scale(input);
 
     let wires: Vec<(EntityID, WireNode)> = Query::<&WireNode>::new(world)
@@ -351,6 +403,81 @@ fn wire_under_pointer(world: &World, input: &UiInput, layout: &EntityUiElements)
         }
     }
     closest.map(|(_, id)| id)
+}
+
+/// Pans a graph: pressing its background and dragging moves every tile with the pointer.  Wires,
+/// the hover ring and the wire preview follow the dots, so they move along.
+fn pan_graphs(world: World, input: Res<UiInput>, mut pan: ResMut<GraphPan>) {
+    // grab a graph when its background is pressed
+    if input.pressed && let Some(id) = input.hovered && has::<GraphRoot>(&world, id) {
+        pan.0 = Some(id);
+    }
+    let Some(root) = pan.0 else { return };
+    if !input.down {
+        pan.0 = None;
+        return;
+    }
+    let delta = input.delta / scale(&input);
+    if delta == Vec2::ZERO { return }
+
+    // move the view, then the tiles with it
+    if let Ok(Some(mut graph)) = world.handle(root).get::<&mut GraphRoot>() {
+        graph.pan += delta;
+    }
+    let tiles: Vec<EntityID> = children_with::<TileNode>(&world)
+        .into_iter()
+        .filter(|(_, parent)| *parent == root)
+        .map(|(id, _)| id)
+        .collect();
+    for tile in tiles {
+        let Ok(Some(mut node)) = world.handle(tile).get::<&mut Node>() else { continue };
+        if let PositionType::Absolute(edges) = node.style().position_type()
+            && let (Val::Px(left), Val::Px(top)) = (*edges.left(), *edges.top()) {
+            set_top_left(&mut node, Vec2::new(left, top) + delta);
+        }
+    }
+}
+
+/// Adds tiles from a graph's right click menu.  The menu only opens over the graph's empty
+/// background, so right clicking a wire still disconnects it, and a chosen tile is added where
+/// the menu was opened.
+fn add_tiles(
+    world: World,
+    input: Res<UiInput>,
+    layout: Res<EntityUiElements>,
+    editor: Res<DeltosEditor>,
+    activated: Event<Activate>,
+    mut opened: ResMut<NewTileMenu>
+) {
+    // allow the menu only over the background of the hovered graph, away from its wires
+    let over_wire = wire_under_pointer(&world, &input, &layout).is_some();
+    let roots: Vec<EntityID> = Query::<&GraphRoot>::new(&world)
+        .iter()
+        .map(|(id, _)| id)
+        .collect();
+    for root in roots {
+        let disabled = over_wire || input.hovered != Some(root);
+        if let Ok(Some(mut menu)) = world.handle(root).get::<&mut ContextMenu>()
+            && menu.disabled != disabled {
+            menu.disabled = disabled;
+        }
+        if input.right_pressed && !disabled { opened.0 = Some(input.cursor) }
+    }
+
+    // add the chosen tile where the menu opened, without the graph's pan
+    let scale = scale(&input);
+    for event in activated.read() {
+        let entity = event.entity;
+        let Some(item) = component::<NewTileItem>(&world, entity) else { continue };
+        let Some(root) = root_of(&world, entity) else { continue };
+        let Some(GraphRoot { graph, pan }) = component::<GraphRoot>(&world, root) else { continue };
+        let (Some(at), Some((root_position, _))) = (opened.0, computed_rect(&world, root)) else { continue };
+
+        let position = (at - root_position) / scale - pan;
+        for tile in graph.add_tile(item.name, position, pan, &editor.theme, &editor.font) {
+            world.spawn_with_parent(Some(root), tile.into_entity_builder());
+        }
+    }
 }
 
 /// Replaces the drawn wires of every view of `graph` with the graph's current ones.
